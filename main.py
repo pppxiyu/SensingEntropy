@@ -3,43 +3,52 @@ import data as dd
 import model as mo
 import visualization as vis
 
-# Geometry manually processing
+# Geometry manual processing
 road_data = dd.RoadData()
 road_data.pull_nyc_dot_traffic(dir_NYC_data_token, ['2020-04-01', '2020-04-30'], True)
+road_data.import_adapted_nyc_road(dir_adapted_nyc_roads)
 
-# Identify flooding days from closures
+# Identify flooding periods from closures
 road_data.import_street_flooding(dir_road_closure, local_crs, 20)
 # vis.overlap_roads_flood_plotly(
-#     road_data.road_geo.to_crs(local_crs), road_data.road_closure.to_crs(local_crs), buffer=20,
+#     road_data.geo.to_crs(local_crs), road_data.closures.to_crs(local_crs), buffer=20,
 #     mapbox_token=mapbox_token, save_dir=dir_figure_save
 # )
-road_data.convert_closure_2_prob()
-# vis.map_flood_p(road_data.road_geo, road_data.road_closure_p, mapbox_token, local_crs)
+# vis.bar_flood_prob(road_data.closure_p_per_segment.iloc[48])
+# vis.map_flood_p(road_data.geo, road_data.closure_p_per_segment, mapbox_token, local_crs)
+road_data.infer_flooding_time_citywide()
+road_data.infer_flooding_time_per_road()
 
 # Pull traffic data in flooding periods
-road_data.pull_nyc_dot_traffic(dir_NYC_data_token, ['2020-04-01', '2020-04-30'], False)
-road_data.resample_nyc_dot_traffic(road_data.road_speed)
+road_data.pull_nyc_dot_traffic_flooding(dir_NYC_data_token)
+road_data.resample_nyc_dot_traffic(road_data.speed)
 
-# Fit conditional distributions of traffic speeds
+# Fit marginal distributions
 bayes_network = mo.TrafficBayesNetwork()
-bayes_network.fit_gmm_4_segment(road_data.road_speed, max_components=3)
-# for seg in road_data.road_speed['link_id'].unique()[0: 10]:
+bayes_network.fit_speed(road_data.speed, max_components=3)
+# for seg in road_data.speed['link_id'].unique()[0: 10]:
 #     vis.dist_gmm_1d(
-#         road_data.road_speed[road_data.road_speed['link_id'] == seg]['speed'].values,
+#         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
 #         bayes_network.gmm_per_segment[seg]
 #     )
-road_data.import_adapted_nyc_road(dir_adapted_nyc_roads)
-bayes_network.build_network_from_geo(road_data.road_geo)
-# vis.map_road_network_connections(road_data.road_geo, bayes_network.network, local_crs)
-bayes_network.fit_gmm_4_dependency(road_data.road_speed_resampled)
-# for k, v in bayes_network.gmm_dependency.items():
+bayes_network.fit_flood(road_data.closures)
+
+# Fit joint distributions: road - road
+bayes_network.build_network_from_geo(road_data.geo)
+# vis.map_road_network_connections(road_data.geo, bayes_network.network, local_crs)
+bayes_network.fit_joint_speed_n_speed(road_data.speed_resampled)
+# for k, v in list(bayes_network.gmm_joint_road_road.items())[1: 10]:
 #     if len(v[0]) == 1:
 #         vis.dist_gmm_3d(v[1], k, v[0][0])
 
-# Fit conditional distributions between closure and traffic speeds
+# Fit joint distributions: flood - road
+bayes_network.fit_joint_flood_n_speed(
+    road_data.flood_time_per_road, road_data.speed_resampled, max_components=3,
+)
+# for k, v in bayes_network.gmm_joint_flood_road.items():
+#     vis.dist_discrete_gmm(k, v)
 
-
-# Remove flooding node and calculate global join distribution
+# Give observed flooding and calculate global join distribution
 
 
 # Greedy algorithm

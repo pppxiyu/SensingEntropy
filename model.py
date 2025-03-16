@@ -1,6 +1,7 @@
 import numpy as np
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
 from sklearn.mixture import GaussianMixture
-from pgmpy.models import BayesianNetwork
 import visualization as vis
 
 
@@ -8,7 +9,9 @@ class TrafficBayesNetwork:
     def __init__(self):
         self.network = None
         self.gmm_per_segment = None
-        self.gmm_dependency = None
+        self.closure_p_per_segment = None
+        self.gmm_joint_road_road = None
+        self.gmm_joint_flood_road = None
         return
 
     @staticmethod
@@ -31,13 +34,26 @@ class TrafficBayesNetwork:
                 best_gmm = gmm
         return best_gmm
 
-    def fit_gmm_4_segment(self, df, max_components=2):
+    def fit_speed(self, df, max_components=2):
         segment_gmms = {}
         for segment, data in df.groupby("link_id"):
             speeds = data["speed"].values.reshape(-1, 1)
             best_gmm = self._optimal_gmm(speeds, max_components)
             segment_gmms[segment] = best_gmm
         self.gmm_per_segment = segment_gmms
+        return
+
+    def fit_flood(self, closures, interval='1D', if_vis=False):
+        if if_vis:
+            vis.bar_closure_count_over_time(closures.copy())
+        pass
+        closures = closures.copy().set_index('time_create')
+        closure_count = closures.groupby('link_id').count()['id']
+        daily_counts = closures.resample(interval).size().fillna(0)
+        flooding_day_count = len(daily_counts[daily_counts > 0])
+        closure_count_p = closure_count / flooding_day_count
+        closure_count_p = closure_count_p.reset_index().rename(columns={'id': 'p'})
+        self.closure_p_per_segment = closure_count_p
         return
 
     @staticmethod
@@ -53,6 +69,7 @@ class TrafficBayesNetwork:
         return downstream
 
     def build_network_from_geo_legacy(self, roads_geo):
+        from pgmpy.models import BayesianNetwork
         edges = []
         for _, row in roads_geo.iterrows():
             downstream_segments = self._find_downstream_segment(row, roads_geo)
@@ -106,11 +123,12 @@ class TrafficBayesNetwork:
             significance=0.01, max_lag=2, max_upstream_roads=2
     ):
         # legacy call in main: build_network_by_causality(
-        #     road_data.road_speed_resampled, road_data.road_geo, local_crs,
+        #     road_data.speed_resampled, road_data.geo, local_crs,
         #     significance=0.05, max_lag=1, max_upstream_roads=1
         # )
         from statsmodels.tsa.stattools import grangercausalitytests
         from collections import defaultdict
+        from pgmpy.models import BayesianNetwork
 
         road_speed = road_speed.pivot(index="time", columns="link_id", values="speed")
         causality_scores = {}
@@ -187,7 +205,7 @@ class TrafficBayesNetwork:
             graph.remove_edge(*edge_to_remove)
         return list(graph.edges())
 
-    def fit_gmm_4_dependency(self, df, max_components=3):
+    def fit_joint_speed_n_speed(self, df, max_components=3):
         dependency_gmms = {}
         i = 0
         for child in self.network.nodes():
@@ -223,6 +241,57 @@ class TrafficBayesNetwork:
             )
             gmm.fit(np.hstack((x, y)))
             dependency_gmms[child] = (parents_filtered, gmm)
-        self.gmm_dependency = dependency_gmms
+        self.gmm_joint_road_road = dependency_gmms
+        return
+
+    def fit_joint_flood_n_speed(self, flood_time, speed, max_components=2):
+        import warnings
+
+        dists = {}
+        for _, row in self.closure_p_per_segment.iterrows():
+            link_id = row['link_id']
+            p_flood = row['p']
+
+            speed_data = speed[speed['link_id'] == link_id].copy()
+            if speed_data.empty or link_id not in flood_time:
+                dists[link_id] = {
+                    'p_flood': p_flood,
+                    'speed_no_flood': None,
+                    'speed_flood': None
+                }
+                continue
+
+            flood_events = flood_time[link_id]
+            speed_data['flooded'] = False
+            for _, event in flood_events.iterrows():
+                mask = (speed_data['time'] >= event['buffer_start']) & (speed_data['time'] <= event['buffer_end'])
+                speed_data.loc[mask, 'flooded'] = True
+            speed_flood = speed_data[speed_data['flooded']]['speed']
+            speed_no_flood = speed_data[~speed_data['flooded']]['speed']
+
+            def get_gmm(df):
+                if len(df) > max_components:
+                    gmm = self._optimal_gmm(df.values.reshape(-1, 1), max_components)
+                elif len(df) > 0:
+                    gmm = self._optimal_gmm(df.values.reshape(-1, 1), 1)
+                else:
+                    gmm = GaussianMixture(n_components=1, random_state=42)
+                    gmm.means_ = np.array([[0.0]])
+                    gmm.covariances_ = np.array([[[.05]]])
+                    gmm.weights_ = np.array([1.0])
+                    gmm.precisions_cholesky_ = np.array([[[1.0 / np.sqrt(1e-10)]]])
+                    gmm.converged_ = True
+                    warnings.warn('No speed data during the df time range. Zero speed assumed.')
+                return gmm
+
+            gmm_no_flood = get_gmm(speed_no_flood)
+            gmm_flood = get_gmm(speed_flood)
+
+            dists[link_id] = {
+                'p_flood': p_flood,
+                'speed_no_flood': gmm_no_flood,
+                'speed_flood': gmm_flood
+            }
+        self.gmm_joint_flood_road = dists
         return
 

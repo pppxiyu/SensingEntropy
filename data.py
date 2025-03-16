@@ -5,11 +5,13 @@ import visualization as vis
 
 class RoadData:
     def __init__(self):
-        self.road_geo = None
-        self.road_speed = None
-        self.road_closure = None
-        self.road_closure_p = None
-        self.road_speed_resampled = None
+        self.geo = None
+        self.speed = None
+        self.speed_resampled = None
+        self.closures = None
+        self.closures_prob = None
+        self.flood_time_citywide = None
+        self.flood_time_per_road = None
 
     @staticmethod
     def _parse_encoded_lines(string):
@@ -56,7 +58,7 @@ class RoadData:
             if os.path.exists(f'./cache/nyc_roads_geo.geojson'):
                 print("Road geometry file exists")
                 data = gpd.read_file(f'./cache/nyc_roads_geo.geojson')
-                # self.road_geo = data
+                # self.geo = data
                 return
             else:
                 print("Road geometry file does not exist. Pull it.")
@@ -68,7 +70,7 @@ class RoadData:
                     dtype={"link_id": str}, parse_dates=["time"]
                 )
                 data = self._remove_all_zero_segment(data)
-                self.road_speed = data
+                self.speed = data
                 return
             else:
                 print("Traffic file does not exist. Pull it.")
@@ -130,11 +132,13 @@ class RoadData:
                 plt.show()
 
             all_data.to_file(f'./cache/nyc_roads_geo.geojson', driver="GeoJSON")
-            # self.road_geo = all_data
+            # self.geo = all_data
         else:
             all_data = all_data.rename(columns={'DATA_AS_OF': 'time', 'LINK_ID': 'link_id', 'SPEED': 'speed'})
+            time_range[0] = time_range[0].replace(':', '-').replace('T', '-')
+            time_range[1] = time_range[1].replace(':', '-').replace('T', '-')
             all_data.to_csv(f'./cache/nyc_traffic_{time_range[0]}_{time_range[1]}.csv', index=False)
-            self.road_speed = all_data
+            self.speed = all_data
         return all_data
 
     def import_street_flooding(self, dir_file, crs, buffer):
@@ -153,7 +157,7 @@ class RoadData:
         gdf = gpd.GeoDataFrame(gdf, geometry='geometry').set_crs('4326')
         gdf = gdf[['id', 'geometry', 'time_create',]]
 
-        road_geo = self.road_geo.to_crs(crs).copy()
+        road_geo = self.geo.to_crs(crs).copy()
         road_geo_buffer = road_geo.copy()
         road_geo_buffer.geometry = road_geo_buffer.buffer(buffer)
         road_closure = gdf.to_crs(crs)
@@ -167,13 +171,16 @@ class RoadData:
         ]
         closure_refine = closure_refine[['id', 'geometry', 'time_create', 'link_id']]
         closure_refine = closure_refine.to_crs(epsg=4326)
-        self.road_closure = closure_refine
+        self.closures = closure_refine
         return closure_refine
 
     def resample_nyc_dot_traffic(self, data):
+        # data.set_index("time", inplace=True)
+        # data_resampled = data.groupby("link_id").resample("5min")["speed"].mean().reset_index()
+        data['time'] = data['time'].dt.round('5min')
         data.set_index("time", inplace=True)
-        data_resampled = data.groupby("link_id").resample("5min")["speed"].mean().reset_index()
-        self.road_speed_resampled = data_resampled
+        data_resampled = data.groupby(['link_id', 'time'])["speed"].mean().reset_index()
+        self.speed_resampled = data_resampled
         return data_resampled
 
     @staticmethod
@@ -186,31 +193,116 @@ class RoadData:
 
     def filter_road_closure(self, crs, buffer):
         from shapely.ops import unary_union
-        road_geo = self.road_closure.to_crs(crs)
-        road_closure = self.road_closure.to_crs(crs)
+        road_geo = self.closures.to_crs(crs)
+        road_closure = self.closures.to_crs(crs)
         road_closure_filtered = road_closure[road_closure.geometry.within(unary_union(road_geo.buffer(buffer).geometry))]
         road_closure_filtered = road_closure_filtered.to_crs(epsg=4326)
-        self.road_closure = road_closure_filtered
-        return
-
-    def convert_closure_2_prob(self, interval='1D', if_vis=False):
-        if if_vis:
-            vis.bar_closure_count_over_time(self.road_closure.copy())
-        pass
-        closures = self.road_closure.copy()
-        closures = closures.set_index('time_create')
-        closure_count = closures.groupby('link_id').count()['id']
-        daily_counts = closures.resample(interval).size().fillna(0)
-        flooding_day_count = len(daily_counts[daily_counts > 0])
-        closure_count_p = closure_count / flooding_day_count
-        closure_count_p = closure_count_p.reset_index().rename(columns={'id': 'p'})
-        self.road_closure_p = closure_count_p
+        self.closures = road_closure_filtered
         return
 
     def import_adapted_nyc_road(self, dir_roads):
         gdf = gpd.read_file(dir_roads)
         gdf = gdf[['link_id', 'link_name', 'geometry']]
-        self.road_geo = gdf
+        self.geo = gdf
+        return
+
+    @staticmethod
+    def infer_flooding_time(df):
+        df['buffer_start'] = df['time_create'] - pd.Timedelta(hours=12)
+        df['buffer_end'] = df['time_create'] + pd.Timedelta(hours=12)
+
+        df = df.sort_values('time_create').reset_index(drop=True)
+        non_overlap_df = pd.DataFrame(columns=['buffer_start', 'buffer_end']).astype(
+            {'buffer_start': 'datetime64[ns]', 'buffer_end': 'datetime64[ns]'}
+        )
+        previous_end = None
+        for index, row in df.iterrows():
+            start = row['buffer_start']
+            end = row['buffer_end']
+            if previous_end is None or start >= previous_end:
+                non_overlap_df = pd.concat(
+                    [non_overlap_df, pd.DataFrame({'buffer_start': [start], 'buffer_end': [end]})],
+                    ignore_index=True
+                )
+                previous_end = end
+            elif end > previous_end:
+                adjusted_start = previous_end
+                non_overlap_df = pd.concat(
+                    [non_overlap_df, pd.DataFrame({'buffer_start': [adjusted_start], 'buffer_end': [end]})],
+                    ignore_index=True)
+                previous_end = end
+
+        non_overlap_df = non_overlap_df.sort_values('buffer_start').reset_index(drop=True)
+        combined_df = pd.DataFrame(columns=['buffer_start', 'buffer_end']).astype(
+            {'buffer_start': 'datetime64[ns]', 'buffer_end': 'datetime64[ns]'}
+        )
+        current_start = non_overlap_df.iloc[0]['buffer_start']
+        current_end = non_overlap_df.iloc[0]['buffer_end']
+        for i in range(1, len(non_overlap_df)):
+            next_start = non_overlap_df.iloc[i]['buffer_start']
+            next_end = non_overlap_df.iloc[i]['buffer_end']
+            if next_start == current_end:
+                current_end = next_end
+            else:
+                combined_df = pd.concat(
+                    [combined_df, pd.DataFrame({'buffer_start': [current_start], 'buffer_end': [current_end]})],
+                    ignore_index=True
+                )
+                current_start = next_start
+                current_end = next_end
+        combined_df = pd.concat(
+            [combined_df, pd.DataFrame({'buffer_start': [current_start], 'buffer_end': [current_end]})],
+            ignore_index=True
+        )
+        return combined_df
+
+    def infer_flooding_time_citywide(self):
+        self.flood_time_citywide = self.infer_flooding_time(self.closures.copy())
+        return
+
+    def infer_flooding_time_per_road(self,):
+        flood_time_per_road = {}
+        closures = self.closures.copy()
+        for road in closures['link_id'].unique():
+            closures_select = closures.loc[closures['link_id'] == road, :]
+            flood_time_per_road[road] = self.infer_flooding_time(closures_select.copy())
+        self.flood_time_per_road = flood_time_per_road
+        return
+
+    def pull_nyc_dot_traffic_flooding(self, nyc_data_token):
+        import os
+        data_list = []
+        for _, row in self.flood_time_citywide.iterrows():
+            start = row['buffer_start']
+            end = row['buffer_end']
+
+            if os.path.exists(
+                    f"./cache/nyc_traffic_"
+                    f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
+                    f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv"
+            ):
+                print("Traffic file exists")
+            else:
+                print("Traffic file does not exist. Pull it.")
+                self.pull_nyc_dot_traffic(
+                    nyc_data_token,
+                    [start.strftime('%Y-%m-%dT%H:%M:%S'), end.strftime('%Y-%m-%dT%H:%M:%S')],
+                    False
+                )
+
+            try:
+                data = pd.read_csv(
+                    f"./cache/nyc_traffic_"
+                    f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
+                    f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv",
+                    dtype={"link_id": str}, parse_dates=["time"]
+                )
+                data = self._remove_all_zero_segment(data)
+                data_list.append(data)
+            except pd.errors.EmptyDataError:
+                pass
+        df_concat = pd.concat(data_list, ignore_index=True)
+        self.speed = df_concat
         return
 
 

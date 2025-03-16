@@ -185,4 +185,59 @@ def map_flood_p(gdf, p, mapbox_token, local_crs):
     fig.show(renderer="browser")
 
 
+def bar_flood_prob(row):
+    p = row['p']
+    not_p = 1 - p
+
+    categories = ['Flooded', 'Not Flooded']
+    values = [p, not_p]
+
+    plt.figure(figsize=(8, 6))
+    bars = plt.bar(categories, values, color=['blue', 'green'])
+    plt.title('Probability of Flooding', fontsize=12, pad=15)
+    plt.xlabel('Condition', fontsize=10)
+    plt.ylabel('Probability', fontsize=10)
+    plt.ylim(0, 1)
+
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2., height,
+                 f'{height:.4f}',
+                 ha='center', va='bottom')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def dist_discrete_gmm(link, dist):
+    import numpy as np
+    from scipy.stats import norm
+
+    p_flood = dist['p_flood']
+    p_no_flood = 1 - p_flood
+    gmm_no_flood = dist['speed_no_flood']
+    gmm_flood = dist['speed_flood']
+    speed_range = np.linspace(-1, 80, 1000)
+
+    def gmm_pdf(gmm, x):
+        if gmm is None:
+            return np.zeros_like(x, dtype=float)
+        pdf = np.zeros_like(x, dtype=float)
+        for weight, mean, cov in zip(gmm.weights_, gmm.means_.flatten(), gmm.covariances_.flatten()):
+            pdf += weight * norm.pdf(x, loc=mean, scale=np.sqrt(cov))
+        return pdf
+
+    pdf_no_flood = gmm_pdf(gmm_no_flood, speed_range)
+    pdf_flood = gmm_pdf(gmm_flood, speed_range)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(speed_range, pdf_no_flood, label=f'No Flood (P={p_no_flood:.3f})', color='blue')
+    plt.plot(speed_range, pdf_flood, label=f'Flood (P={p_flood:.3f})', color='red')
+    plt.fill_between(speed_range.flatten(), pdf_no_flood, alpha=0.2, color='blue')
+    plt.fill_between(speed_range.flatten(), pdf_flood, alpha=0.2, color='red')
+    plt.xlabel('Speed')
+    plt.ylabel('Probability Density (Scaled by P(I))')
+    plt.legend()
+    plt.show()
+    pass
 
