@@ -33,25 +33,43 @@ bayes_network.fit_speed(road_data.speed, max_components=3)
 #     )
 bayes_network.fit_flood(road_data.closures)
 
-# Fit joint distributions: road - road
-bayes_network.build_network_from_geo(road_data.geo)
+# Fit conditional (joint) distributions: road - road
+bayes_network.build_network_from_geo(road_data.geo, remove_no_data_segment=True)
 # vis.map_road_network_connections(road_data.geo, bayes_network.network, local_crs)
 bayes_network.fit_joint_speed_n_speed(road_data.speed_resampled)
 # for k, v in list(bayes_network.gmm_joint_road_road.items())[1: 10]:
 #     if len(v[0]) == 1:
 #         vis.dist_gmm_3d(v[1], k, v[0][0])
 
-# Fit joint distributions: flood - road
+# Fit conditional (joint) distributions: flood - road
 bayes_network.fit_joint_flood_n_speed(
     road_data.flood_time_per_road, road_data.speed_resampled, max_components=3,
 )
 # for k, v in bayes_network.gmm_joint_flood_road.items():
 #     vis.dist_discrete_gmm(k, v)
 
-# Give observed flooding and calculate global join distribution
+# Measure unobserved network entropy (for one sensor)
+bayes_network.calculate_network_entropy()
+
+# Update network with observed distributions
+
+# Measure observed network entropy (for one sensor)
+# 0.01 * entropy {network updated with flood time dist} + 0.99 * entropy {network with non-flood time dist}
+# Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
+
+# Place one sensor
+
+# Place multiple sensors
 
 
-# Greedy algorithm
+
+
+
+
+
+
+
+
 
 
 

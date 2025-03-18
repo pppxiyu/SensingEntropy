@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -79,7 +81,33 @@ class TrafficBayesNetwork:
         self.network = BayesianNetwork(edges)
         return
 
-    def build_network_from_geo(self, gdf):
+    def remove_no_data_segment_from_network(self, graph):
+        node_list_graph = list(graph.nodes())
+        node_list_gmm = list(self.gmm_per_segment.keys())
+        graph_node_not_in_gmm = []
+        for n in node_list_graph:
+            if n not in node_list_gmm:
+                graph_node_not_in_gmm.append(n)
+        if not graph_node_not_in_gmm:
+            return graph
+        else:
+            for nn in graph_node_not_in_gmm:
+                predecessors = list(graph.predecessors(nn))
+                successors = list(graph.successors(nn))
+                for pred in predecessors:
+                    for succ in successors:
+                        graph.add_edge(pred, succ)
+                graph.remove_node(nn)
+
+            graph_covered_by_speed_data = True
+            for n in list(graph.nodes()):
+                if n not in node_list_gmm:
+                    graph_covered_by_speed_data = False
+                    break
+            assert graph_covered_by_speed_data, 'Some nodes in the network do not have speed data.'
+            return graph
+
+    def build_network_from_geo(self, gdf, remove_no_data_segment=True):
         import networkx as nx
         graph = nx.DiGraph()
 
@@ -115,6 +143,11 @@ class TrafficBayesNetwork:
                                     abs(source_end[1] - coord[1]) < tolerance):
                                 graph.add_edge(source_link_id, target_link_id)
                                 break
+        if not nx.is_directed_acyclic_graph(graph):
+            import warnings
+            warnings.warn('The network is not acyclic.')
+        if remove_no_data_segment:
+            graph = self.remove_no_data_segment_from_network(graph)
         self.network = graph
         return
 
@@ -294,4 +327,46 @@ class TrafficBayesNetwork:
             }
         self.gmm_joint_flood_road = dists
         return
+
+    @staticmethod
+    def calculate_gmm_entropy_approximation(gmm, n_samples=10000):
+        samples, _ = gmm.sample(n_samples)
+        log_probs = gmm.score_samples(samples)
+        entropy = -np.mean(log_probs)
+        return entropy
+
+    def calculate_network_entropy(self):
+        import networkx as nx
+
+        topo_order = list(nx.topological_sort(self.network))
+        total_entropy = 0.0
+        for node in topo_order:
+            parents = list(self.network.predecessors(node))
+            if not parents:
+                gmm = self.gmm_per_segment[node]
+                entropy = self.calculate_gmm_entropy_approximation(gmm)
+                total_entropy += entropy
+                print(f"Node {node} (root): H({node}) = {entropy:.4f}")
+
+            else:
+                if node in self.gmm_joint_road_road:
+                    parent_ids, joint_gmm = self.gmm_joint_road_road[node]
+                    h_joint = self.calculate_gmm_entropy_approximation(joint_gmm)
+                    if len(parents) == 1:
+                        h_parents = self.calculate_gmm_entropy_approximation(self.gmm_per_segment[parents[0]])
+                    else:
+                        # NOTE: Joint dist of parent nodes is needed here.
+                        # But we can assume that upstream roads are independent.
+                        # Thus, the sum of marginal entropies could be used here.
+                        h_parents = sum(
+                            self.calculate_gmm_entropy_approximation(self.gmm_per_segment[p]) for p in parents
+                        )
+                    conditional_entropy = h_joint - h_parents
+                    total_entropy += conditional_entropy
+                    print(f"Node {node}: H({node}|{parents}) = {conditional_entropy:.4f}")
+                else:
+                    raise ValueError('Missing join dist for calculate conditional entropy.')
+
+        print(f"Total Entropy of the Bayesian Network: {total_entropy:.4f}")
+        return total_entropy
 

@@ -69,7 +69,7 @@ class RoadData:
                     f'./cache/nyc_traffic_{time_range[0]}_{time_range[1]}.csv',
                     dtype={"link_id": str}, parse_dates=["time"]
                 )
-                data = self._remove_all_zero_segment(data)
+                data = self._remove_segment_w_many_na(data)
                 self.speed = data
                 return
             else:
@@ -174,21 +174,27 @@ class RoadData:
         self.closures = closure_refine
         return closure_refine
 
-    def resample_nyc_dot_traffic(self, data):
-        # data.set_index("time", inplace=True)
-        # data_resampled = data.groupby("link_id").resample("5min")["speed"].mean().reset_index()
-        data['time'] = data['time'].dt.round('5min')
+    def resample_nyc_dot_traffic(self, data, time_interval='5min'):
+        data['time'] = data['time'].dt.round(time_interval)
         data.set_index("time", inplace=True)
         data_resampled = data.groupby(['link_id', 'time'])["speed"].mean().reset_index()
         self.speed_resampled = data_resampled
         return data_resampled
 
     @staticmethod
-    def _remove_all_zero_segment(data, threshold=0.75):
+    def _remove_all_zero_segment(data, threshold=.75):
         data_pivot = data.pivot(index="time", columns="link_id", values="speed")
         zero_percent = (data_pivot == 0).sum() / (~data_pivot.isna()).sum()
         valid_segments = zero_percent[zero_percent < threshold].index
         data = data[data['link_id'].isin(valid_segments)]
+        return data
+
+    @staticmethod
+    def _remove_segment_w_many_na(data, time_interval='5min', threshold=.5):
+        max_count = data['time'].dt.round(time_interval).nunique()
+        value_per = (data.groupby('link_id').count() / max_count)['speed']
+        valid_seg = value_per[value_per > threshold]
+        data = data[data['link_id'].isin(valid_seg.index.to_list())]
         return data
 
     def filter_road_closure(self, crs, buffer):
@@ -297,11 +303,11 @@ class RoadData:
                     f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv",
                     dtype={"link_id": str}, parse_dates=["time"]
                 )
-                data = self._remove_all_zero_segment(data)
                 data_list.append(data)
             except pd.errors.EmptyDataError:
                 pass
         df_concat = pd.concat(data_list, ignore_index=True)
+        df_concat = self._remove_segment_w_many_na(df_concat)
         self.speed = df_concat
         return
 
