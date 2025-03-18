@@ -370,3 +370,32 @@ class TrafficBayesNetwork:
         print(f"Total Entropy of the Bayesian Network: {total_entropy:.4f}")
         return total_entropy
 
+    def update_network_with_observed_dist(self, link_name, observed_dist, n_samples=10000, max_components=2):
+
+        self.gmm_per_segment[link_name] = observed_dist
+        print(f"Updated marginal for {link_name} with new GMM")
+
+        if link_name in self.gmm_joint_road_road:
+            parent_ids, _ = self.gmm_joint_road_road[link_name]
+            samples_obs_dist = observed_dist.sample(n_samples)[0]
+            parent_samples = [self.gmm_per_segment[p].sample(n_samples)[0] for p in parent_ids]
+            joint_samples = np.column_stack([samples_obs_dist] + parent_samples)
+            new_joint_gmm = self._optimal_gmm(joint_samples, max_components=max_components)
+            self.gmm_joint_road_road[link_name] = (parent_ids, new_joint_gmm)
+            print(f"Updated joint distribution for {link_name} with parents {parent_ids}")
+
+        for child in self.network.successors(link_name):
+            assert child in self.gmm_joint_road_road
+            samples_obs_dist = observed_dist.sample(n_samples)[0]
+            child_samples = self.gmm_per_segment[child].sample(n_samples)[0]
+            parent_ids, _ = self.gmm_joint_road_road[child]
+            other_parents = [p for p in parent_ids if p != link_name]
+            other_samples = [self.gmm_per_segment[p].sample(n_samples)[0] for p in other_parents]
+            joint_samples = np.column_stack([child_samples, samples_obs_dist] + other_samples)
+            new_child_joint_gmm = self._optimal_gmm(joint_samples, max_components=max_components)
+            self.gmm_joint_road_road[child] = (parent_ids, new_child_joint_gmm)
+            print(f"Updated joint distribution for child {child} with parents {parent_ids}")
+
+        print(f"Bayesian Network updated with new distribution for {link_name} as evidence")
+        return
+

@@ -48,12 +48,14 @@ bayes_network.fit_joint_flood_n_speed(
 # for k, v in bayes_network.gmm_joint_flood_road.items():
 #     vis.dist_discrete_gmm(k, v)
 
-# Measure unobserved network entropy (for one sensor)
+# Measure unobserved network entropy
 bayes_network.calculate_network_entropy()
 
-# Update network with observed distributions
-
 # Measure observed network entropy (for one sensor)
+# Update network first with observed distributions
+for k, v in bayes_network.gmm_joint_flood_road.items():
+    bayes_network.update_network_with_observed_dist(k, v['speed_no_flood'], max_components=3)
+    bayes_network.update_network_with_observed_dist(k, v['speed_flood'], max_components=3)
 # 0.01 * entropy {network updated with flood time dist} + 0.99 * entropy {network with non-flood time dist}
 # Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
 
