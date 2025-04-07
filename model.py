@@ -1,5 +1,3 @@
-import warnings
-
 import numpy as np
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -77,7 +75,7 @@ class TrafficBayesNetwork:
             downstream_segments = self._find_downstream_segment(row, roads_geo)
             if downstream_segments:
                 for downstream_segment in downstream_segments:
-                    edges.append((row["link_id"], downstream_segment))
+                    edges.append((downstream_segment, row["link_id"]))  # downstream affect upstream
         self.network = BayesianNetwork(edges)
         return
 
@@ -263,8 +261,8 @@ class TrafficBayesNetwork:
             if len(parent_data) == 0 or len(child_data) == 0:
                 continue
 
-            x = parent_data.values
-            y = child_data.values.reshape(-1, 1)
+            x = child_data.values.reshape(-1, 1)
+            y = parent_data.values  # keep the child at the first dim
 
             gmm = GaussianMixture(
                 n_components=max_components,
@@ -277,7 +275,7 @@ class TrafficBayesNetwork:
         self.gmm_joint_road_road = dependency_gmms
         return
 
-    def fit_joint_flood_n_speed(self, flood_time, speed, max_components=2):
+    def fit_joint_flood_n_speed(self, flood_time, speed, max_components=2, verbose=0):
         import warnings
 
         dists = {}
@@ -303,18 +301,12 @@ class TrafficBayesNetwork:
             speed_no_flood = speed_data[~speed_data['flooded']]['speed']
 
             def get_gmm(df):
-                if len(df) > max_components:
+                if (len(df)) > 50 and (df.sum() != 0):
                     gmm = self._optimal_gmm(df.values.reshape(-1, 1), max_components)
-                elif len(df) > 0:
-                    gmm = self._optimal_gmm(df.values.reshape(-1, 1), 1)
                 else:
-                    gmm = GaussianMixture(n_components=1, random_state=42)
-                    gmm.means_ = np.array([[0.0]])
-                    gmm.covariances_ = np.array([[[.05]]])
-                    gmm.weights_ = np.array([1.0])
-                    gmm.precisions_cholesky_ = np.array([[[1.0 / np.sqrt(1e-10)]]])
-                    gmm.converged_ = True
-                    warnings.warn('No speed data during the df time range. Zero speed assumed.')
+                    gmm = None
+                    if verbose > 0:
+                        warnings.warn(f'Sample size is too small. Skipped.')
                 return gmm
 
             gmm_no_flood = get_gmm(speed_no_flood)
@@ -335,67 +327,155 @@ class TrafficBayesNetwork:
         entropy = -np.mean(log_probs)
         return entropy
 
-    def calculate_network_entropy(self):
+    def calculate_network_entropy(self, marginals=None, joints=None, verbose=1):
         import networkx as nx
+
+        if marginals is None:
+            marginals = self.gmm_per_segment
+        if joints is None:
+            joints = self.gmm_joint_road_road
 
         topo_order = list(nx.topological_sort(self.network))
         total_entropy = 0.0
         for node in topo_order:
             parents = list(self.network.predecessors(node))
             if not parents:
-                gmm = self.gmm_per_segment[node]
+                gmm = marginals[node]
                 entropy = self.calculate_gmm_entropy_approximation(gmm)
                 total_entropy += entropy
-                print(f"Node {node} (root): H({node}) = {entropy:.4f}")
+                if verbose > 1:
+                    print(f"Node {node} (root): H({node}) = {entropy:.4f}")
 
             else:
-                if node in self.gmm_joint_road_road:
-                    parent_ids, joint_gmm = self.gmm_joint_road_road[node]
+                if node in joints:
+                    parent_ids, joint_gmm = joints[node]
                     h_joint = self.calculate_gmm_entropy_approximation(joint_gmm)
                     if len(parents) == 1:
-                        h_parents = self.calculate_gmm_entropy_approximation(self.gmm_per_segment[parents[0]])
+                        h_parents = self.calculate_gmm_entropy_approximation(marginals[parents[0]])
                     else:
                         # NOTE: Joint dist of parent nodes is needed here.
                         # But we can assume that upstream roads are independent.
                         # Thus, the sum of marginal entropies could be used here.
                         h_parents = sum(
-                            self.calculate_gmm_entropy_approximation(self.gmm_per_segment[p]) for p in parents
+                            self.calculate_gmm_entropy_approximation(marginals[p]) for p in parents
                         )
                     conditional_entropy = h_joint - h_parents
                     total_entropy += conditional_entropy
-                    print(f"Node {node}: H({node}|{parents}) = {conditional_entropy:.4f}")
+                    if verbose > 1:
+                        print(f"Node {node}: H({node}|{parents}) = {conditional_entropy:.4f}")
                 else:
                     raise ValueError('Missing join dist for calculate conditional entropy.')
-
-        print(f"Total Entropy of the Bayesian Network: {total_entropy:.4f}")
+        if verbose >= 1:
+            print(f"Total Entropy of the Bayesian Network: {total_entropy:.8f}")
         return total_entropy
 
-    def update_network_with_observed_dist(self, link_name, observed_dist, n_samples=10000, max_components=2):
+    @staticmethod
+    def update_joint_from_parent(
+            orig_joint, orig_xk_gmm, observed_xk_gmm, link_name, parent_ids, n_samples,
+    ):
+        # sample from original joint, p(A, B_1, B_2), for example
+        joint_samples = orig_joint.sample(n_samples)[0]
+        xk_idx = parent_ids.index(link_name) + 1  # +1 because child is first
+        xk_samples = joint_samples[:, [xk_idx]]
 
-        self.gmm_per_segment[link_name] = observed_dist
-        print(f"Updated marginal for {link_name} with new GMM")
+        # get the ratio term, p'(B_1)/p(B_1)
+        log_weights = (observed_xk_gmm.score_samples(xk_samples) - orig_xk_gmm.score_samples(xk_samples))
+        weights = np.exp(log_weights - np.max(log_weights))
+        weights /= weights.sum()
 
-        if link_name in self.gmm_joint_road_road:
-            parent_ids, _ = self.gmm_joint_road_road[link_name]
-            samples_obs_dist = observed_dist.sample(n_samples)[0]
-            parent_samples = [self.gmm_per_segment[p].sample(n_samples)[0] for p in parent_ids]
-            joint_samples = np.column_stack([samples_obs_dist] + parent_samples)
-            new_joint_gmm = self._optimal_gmm(joint_samples, max_components=max_components)
-            self.gmm_joint_road_road[link_name] = (parent_ids, new_joint_gmm)
-            print(f"Updated joint distribution for {link_name} with parents {parent_ids}")
+        # apply the ratio term
+        indices = np.random.choice(n_samples, size=n_samples, p=weights, replace=True)
+        return joint_samples[indices]
 
-        for child in self.network.successors(link_name):
-            assert child in self.gmm_joint_road_road
-            samples_obs_dist = observed_dist.sample(n_samples)[0]
-            child_samples = self.gmm_per_segment[child].sample(n_samples)[0]
-            parent_ids, _ = self.gmm_joint_road_road[child]
-            other_parents = [p for p in parent_ids if p != link_name]
-            other_samples = [self.gmm_per_segment[p].sample(n_samples)[0] for p in other_parents]
-            joint_samples = np.column_stack([child_samples, samples_obs_dist] + other_samples)
-            new_child_joint_gmm = self._optimal_gmm(joint_samples, max_components=max_components)
-            self.gmm_joint_road_road[child] = (parent_ids, new_child_joint_gmm)
-            print(f"Updated joint distribution for child {child} with parents {parent_ids}")
+    @staticmethod
+    def update_joint_from_child(
+            orig_joint, orig_child_gmm, observed_child_gmm, n_samples,
+    ):
+        # sample from original joint, p(A, B_1, B_2), for example
+        joint_samples = orig_joint.sample(n_samples)[0]
+        child_samples = joint_samples[:, [0]]
 
-        print(f"Bayesian Network updated with new distribution for {link_name} as evidence")
-        return
+        # get the ratio term, p'(B_1)/p(B_1)
+        log_weights = (
+                observed_child_gmm.score_samples(child_samples) - orig_child_gmm.score_samples(child_samples)
+        )
+        weights = np.exp(log_weights - np.max(log_weights))
+        weights /= weights.sum()
 
+        # apply the ratio term
+        indices = np.random.choice(n_samples, size=n_samples, p=weights, replace=True)
+        return joint_samples[indices]
+
+    def update_network_with_observed_dist(
+            self, link_name, observed_dist, marginals, joints, n_samples=10000, max_components=3, verbose=1
+    ):
+        import copy
+        from queue import Queue
+        marginals_updated = copy.deepcopy(marginals)
+        joints_updated = copy.deepcopy(joints)
+
+        if observed_dist is None:
+            return marginals_updated, joints_updated
+
+        # Update marginal and related joints of sensed node
+        orig_xk_gmm = marginals_updated[link_name]
+        marginals_updated[link_name] = observed_dist
+        if link_name in joints_updated.keys():
+            parent_ids, joint_gmm = joints_updated[link_name]
+            resampled_joint_samples = self.update_joint_from_child(
+                joint_gmm, orig_xk_gmm, observed_dist, n_samples,
+            )
+            new_joint_gmm = self._optimal_gmm(resampled_joint_samples, max_components=max_components)
+            joints_updated[link_name] = (parent_ids, new_joint_gmm)
+        else:
+            pass
+        if verbose > 0:
+            print(f"Updated marginal and related joints for {link_name}")
+
+        queue = Queue()
+        queue.put(link_name)
+        processed = set()
+        while not queue.empty():
+            current_node = queue.get()
+            if current_node in processed:
+                continue
+            processed.add(current_node)
+
+            # Update joints and marginals for children of sensed node
+            for child in self.network.successors(link_name):
+                assert child in joints_updated
+                parent_ids, joint_gmm = joints_updated[child]
+                assert link_name in parent_ids
+
+                # update joint: fit new GMM with weighted samples
+                resampled_joint_samples = self.update_joint_from_parent(
+                    joint_gmm, orig_xk_gmm, observed_dist, link_name, parent_ids, n_samples,
+                )
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples, max_components=max_components)
+                joints_updated[child] = (parent_ids, new_joint_gmm)
+                if verbose > 0:
+                    print(f"Updated joint for {child} with parents {parent_ids}")
+
+                # update marginal of child: marginalize updated joint
+                resampled_child_samples = resampled_joint_samples[:, [0]]
+                new_child_gmm = self._optimal_gmm(resampled_child_samples, max_components=max_components)
+                marginals_updated[child] = new_child_gmm
+                if verbose > 0:
+                    print(f"Updated marginal for {child}")
+
+                queue.put(child)
+
+        return marginals_updated, joints_updated
+
+    def calculate_network_conditional_entropy(self, network_list, verbose=1):
+        # Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
+        # Example: 0.01 * entropy {network updated with flood time dist}
+        # + 0.99 * entropy {network with non-flood time dist}
+        entropy = 0
+        for n in network_list:
+            entropy += n['p'] * self.calculate_network_entropy(
+                marginals=n['marginals'], joints=n['joints'], verbose=0,
+            )
+        if verbose > 0:
+            print(f"Total Entropy of the Bayesian Network: {entropy:.8f}")
+        return entropy

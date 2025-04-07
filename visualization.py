@@ -50,7 +50,31 @@ def overlap_roads_flood_plotly(geo_roads, geo_flood, buffer=25, mapbox_token=Non
     return
 
 
-def dist_gmm_1d(speeds, gmm, bins=30):
+def dist_gmm_1d(gmm, speed_range=None,):
+    import numpy as np
+    from scipy.stats import norm
+    if speed_range is None:
+        speed_range = [-1, 70]
+
+    plt.figure(figsize=(8, 5))
+    speed_range = np.linspace(0, speed_range[1], 500)
+    gmm_pdf = np.exp(gmm.score_samples(speed_range.reshape(-1, 1)))
+    plt.plot(speed_range, gmm_pdf, label="GMM Fit", linewidth=2, color='red')
+    weights = gmm.weights_
+    means = gmm.means_.flatten()
+    covariances = gmm.covariances_.flatten()
+    for weight, mean, cov in zip(weights, means, covariances):
+        component_pdf = weight * norm.pdf(speed_range, mean, np.sqrt(cov))
+        plt.plot(speed_range, component_pdf, linestyle='dashed', label=f"Component μ={mean:.2f}", alpha=0.7)
+
+    plt.xlabel("Traffic Speed")
+    plt.ylabel("Density")
+    plt.legend()
+    plt.show()
+    return
+
+
+def dist_histo_gmm_1d(speeds, gmm, bins=30):
     import numpy as np
     from scipy.stats import norm
 
@@ -110,7 +134,7 @@ def map_road_network_connections(gdf, network, local_crs):
     plt.show()
 
 
-def dist_gmm_3d(gmm, segment1, segment2, speed_range=(-10, 90)):
+def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(-10, 90)):
     import numpy as np
     from scipy.stats import multivariate_normal
     x = np.linspace(speed_range[0], speed_range[1], 100)
@@ -209,7 +233,7 @@ def bar_flood_prob(row):
     plt.show()
 
 
-def dist_discrete_gmm(link, dist):
+def dist_discrete_gmm(dist):
     import numpy as np
     from scipy.stats import norm
 
