@@ -10,9 +10,8 @@ road_data.import_adapted_nyc_road(dir_adapted_nyc_roads)
 
 # Identify flooding periods from closures
 road_data.import_street_flooding(dir_road_closure, local_crs, 20)
-# vis.overlap_roads_flood_plotly(
+# vis.map_roads_n_flood_plt(
 #     road_data.geo.to_crs(local_crs), road_data.closures.to_crs(local_crs), buffer=20,
-#     mapbox_token=mapbox_token, save_dir=dir_figure_save
 # )
 # vis.bar_flood_prob(road_data.closure_p_per_segment.iloc[48])
 # vis.map_flood_p(road_data.geo, road_data.closure_p_per_segment, mapbox_token, local_crs)
@@ -35,7 +34,11 @@ bayes_network.fit_flood(road_data.closures)
 
 # Fit conditional (joint) distributions: road - road
 bayes_network.build_network_from_geo(road_data.geo, remove_no_data_segment=True)
-# vis.map_road_network_connections(road_data.geo, bayes_network.network, local_crs)
+vis.map_roads_n_topology_plt(
+    geo_roads=road_data.geo.copy(),
+    network=bayes_network.network.copy(), network_geo_roads=road_data.geo.copy(),
+    local_crs=local_crs
+)  # FIGURE 1: road network and topology
 bayes_network.fit_joint_speed_n_speed(road_data.speed_resampled)
 # for k, v in list(bayes_network.joints.items())[1: 10]:
 #     if len(v[0]) == 1:
@@ -66,18 +69,6 @@ for k, v in bayes_network.gmm_joint_flood_road.items():
             {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
             {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
         ])
-        print()
-        marginals_no_flood, joints_no_flood = bayes_network.update_network_with_observed_dist(
-            k, v['speed_no_flood'], bayes_network.gmm_per_segment, bayes_network.gmm_joint_road_road, verbose=0
-        )
-        marginals_flood, joints_flood = bayes_network.update_network_with_observed_dist(
-            k, v['speed_flood'], bayes_network.gmm_per_segment, bayes_network.gmm_joint_road_road, verbose=0
-        )
-        bayes_network.calculate_network_conditional_entropy([
-            {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
-            {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
-        ], verbose=0,)
-
 
 # Place one sensor
 
