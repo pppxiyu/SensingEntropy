@@ -13,7 +13,6 @@ road_data.import_street_flooding(dir_road_closure, local_crs, 20)
 # vis.map_roads_n_flood_plt(
 #     road_data.geo.to_crs(local_crs), road_data.closures.to_crs(local_crs), buffer=20,
 # )
-# vis.bar_flood_prob(road_data.closure_p_per_segment.iloc[48])
 # vis.map_flood_p(road_data.geo, road_data.closure_p_per_segment, mapbox_token, local_crs)
 road_data.infer_flooding_time_citywide()
 road_data.infer_flooding_time_per_road()
@@ -22,34 +21,35 @@ road_data.infer_flooding_time_per_road()
 road_data.pull_nyc_dot_traffic_flooding(dir_NYC_data_token)
 road_data.resample_nyc_dot_traffic(road_data.speed)
 
-# Fit marginal distributions
+# Fit marginals
 bayes_network = mo.TrafficBayesNetwork()
 bayes_network.fit_speed(road_data.speed, max_components=3)
 # for seg in road_data.speed['link_id'].unique()[0: 10]:
 #     vis.dist_histo_gmm_1d(
 #         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
-#         bayes_network.marginals[seg]
+#         bayes_network.gmm_per_segment[seg]
 #     )
 bayes_network.fit_flood(road_data.closures)
+# vis.bar_flood_prob(bayes_network.closure_p_per_segment.iloc[48])  # FIGURE 4: flood probability
 
-# Fit conditional (joint) distributions: road - road
+# Fit joints: road - road
 bayes_network.build_network_from_geo(road_data.geo, remove_no_data_segment=True)
-vis.map_roads_n_topology_plt(
-    geo_roads=road_data.geo.copy(),
-    network=bayes_network.network.copy(), network_geo_roads=road_data.geo.copy(),
-    local_crs=local_crs
-)  # FIGURE 1: road network and topology
+# vis.map_roads_n_topology_plt(
+#     geo_roads=road_data.geo.copy(),
+#     network=bayes_network.network.copy(), network_geo_roads=road_data.geo.copy(),
+#     local_crs=local_crs
+# ) # FIGURE 1: road network and topology
 bayes_network.fit_joint_speed_n_speed(road_data.speed_resampled)
-# for k, v in list(bayes_network.joints.items())[1: 10]:
-#     if len(v[0]) == 1:
-#         vis.dist_gmm_3d(v[1], k, v[0][0])
+# for k, v in list(bayes_network.gmm_joint_road_road.items()):
+#     if len(v[0]) == 1:  # the vis only support 3d
+#         vis.dist_gmm_3d(v[1], k, v[0][0])  # FIGURE 2: joint distributions between roads
 
 # Fit relationships flood - road
 bayes_network.fit_joint_flood_n_speed(
     road_data.flood_time_per_road, road_data.speed_resampled, max_components=3,
 )
 # for k, v in bayes_network.gmm_joint_flood_road.items():
-#     vis.dist_discrete_gmm(v)
+#     vis.dist_discrete_gmm(v, bayes_network.gmm_per_segment[k],)  # FIGURE 3: distribution with observation
 
 # Measure unobserved network entropy
 bayes_network.calculate_network_entropy()

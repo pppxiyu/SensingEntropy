@@ -9,7 +9,6 @@ class RoadData:
         self.speed = None
         self.speed_resampled = None
         self.closures = None
-        self.closures_prob = None
         self.flood_time_citywide = None
         self.flood_time_per_road = None
 

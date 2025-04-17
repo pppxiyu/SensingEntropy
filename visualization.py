@@ -239,9 +239,20 @@ def dist_histo_gmm_1d(speeds, gmm, bins=30):
     return
 
 
-def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(-10, 90)):
+def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90)):
     import numpy as np
     from scipy.stats import multivariate_normal
+
+    def _truncate_colormap(cmap_name='viridis', minval=0.2, maxval=0.8, n=256):
+        import numpy as np
+        from matplotlib.colors import LinearSegmentedColormap
+        base_cmap = plt.get_cmap(cmap_name)
+        new_cmap = LinearSegmentedColormap.from_list(
+            f'{cmap_name}_trunc',
+            base_cmap(np.linspace(minval, maxval, n))
+        )
+        return new_cmap
+
     x = np.linspace(speed_range[0], speed_range[1], 100)
     y = np.linspace(speed_range[0], speed_range[1], 100)
     X, Y = np.meshgrid(x, y)
@@ -254,20 +265,58 @@ def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(-10, 90)):
 
     fig = plt.figure(figsize=(10, 7))
     ax = fig.add_subplot(111, projection='3d')
-    ax.plot_surface(X, Y, Z, cmap='viridis', edgecolor='none', alpha=0.9)
-    ax.set_xlabel(f'Traffic Speed on {segment1}')
-    ax.set_ylabel(f'Traffic Speed on {segment2}')
+    ax.plot_surface(
+        X, Y, Z,
+        cmap=_truncate_colormap('viridis', 0.15, 1),
+        edgecolor='none', antialiased=False, alpha=1
+    )
+
+    ax.set_xlabel(f'Speed on Link {segment1} (mph)', fontsize=14, labelpad=12)
+    ax.set_ylabel(f'Speed on Link {segment2} (mph)', fontsize=14, labelpad=12)
+    ax.set_zlabel('Density', fontsize=14, labelpad=12)  # labels
+    ax.ticklabel_format(axis='z', style='sci', scilimits=(-2, 2))
+    ax.zaxis.get_offset_text().set_fontsize(12)  # scientific notation
+
+    ax.set_zlim(bottom=Z.min(),)
+    ax.set_xlim(x.min(), x.max())
+    ax.set_xlim(ax.get_xlim()[::-1])
+    ax.set_ylim(y.min(), y.max())  # tight config
+
+    ax.grid(False)  # remove grid
+
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.pane.set_edgecolor('black')
+        axis.pane.set_linewidth(1.5)  # box edges
+        axis.pane.fill = False  # bg color
+        axis._axinfo['tick']['inward_factor'] = 0
+        axis._axinfo['tick']['outward_factor'] = 0  # remove ticks
+
+    ax.tick_params(axis='x', labelsize=14)
+    ax.tick_params(axis='y', labelsize=14)
+    ax.tick_params(axis='z', labelsize=14)  # font size
+
+    xs = [ax.get_xlim()[0], ax.get_xlim()[0]]
+    ys = [ax.get_ylim()[0], ax.get_ylim()[0]]
+    zs = [ax.get_zlim()[0], ax.get_zlim()[1]]
+    ax.plot(xs, ys, zs, color='black', linewidth=1)  # verticle line on the left
+
+    xticks = np.linspace(x.min(), x.max(), 7)
+    yticks = np.linspace(y.min(), y.max(), 7)
+    ax.set_xticks(xticks)
+    ax.set_yticks(yticks)  # spase label
+
     plt.show()
 
 
-def dist_discrete_gmm(dist):
+def dist_discrete_gmm(dist_w_obs, gmm_wo_abs=None, close_curve=[]):
     import numpy as np
     from scipy.stats import norm
+    import matplotlib.ticker as mtick
 
-    p_flood = dist['p_flood']
+    p_flood = dist_w_obs['p_flood']
     p_no_flood = 1 - p_flood
-    gmm_no_flood = dist['speed_no_flood']
-    gmm_flood = dist['speed_flood']
+    gmm_no_flood = dist_w_obs['speed_no_flood']
+    gmm_flood = dist_w_obs['speed_flood']
     speed_range = np.linspace(-1, 80, 1000)
 
     def gmm_pdf(gmm, x):
@@ -280,16 +329,35 @@ def dist_discrete_gmm(dist):
 
     pdf_no_flood = gmm_pdf(gmm_no_flood, speed_range)
     pdf_flood = gmm_pdf(gmm_flood, speed_range)
+    if gmm_wo_abs is not None:
+        pdf_wo_abs = gmm_pdf(gmm_wo_abs, speed_range)
 
-    plt.figure(figsize=(10, 6))
-    plt.plot(speed_range, pdf_no_flood, label=f'No Flood (P={p_no_flood:.3f})', color='blue')
-    plt.plot(speed_range, pdf_flood, label=f'Flood (P={p_flood:.3f})', color='red')
-    plt.fill_between(speed_range.flatten(), pdf_no_flood, alpha=0.2, color='blue')
-    plt.fill_between(speed_range.flatten(), pdf_flood, alpha=0.2, color='red')
-    plt.xlabel('Speed')
-    plt.ylabel('Probability Density (Scaled by P(I))')
-    plt.legend()
+    fig, ax = plt.subplots(figsize=(7.7, 7))
+    plt.rc('font', size=28)
+    if gmm_wo_abs is not None:
+        ax.plot(speed_range, pdf_wo_abs, label=f'w/o observation', color='grey', linestyle='--')
+        # ax.fill_between(speed_range, pdf_wo_abs, alpha=0.2, color='grey')
+    if 'no_flood' not in close_curve:
+        ax.plot(speed_range, pdf_no_flood, label=f'No Flood (p={p_no_flood:.3f})', color='#0339A6')
+        ax.fill_between(speed_range, pdf_no_flood, alpha=0.2, color='#4174D9')
+    if 'flood' not in close_curve:
+        ax.plot(speed_range, pdf_flood, label=f'Flood (p={p_flood:.3f})', color='#D91604')
+        ax.fill_between(speed_range, pdf_flood, alpha=0.2, color='#D95448')
+    ax.set_xlabel('Speed (mph)')
+    ax.set_ylabel('Density')
+    ax.legend()
+
+    ax.yaxis.set_major_formatter(mtick.ScalarFormatter(useMathText=True))
+    ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))  # scientific notation
+
+    ax.legend(frameon=False, fontsize=16)
+
+    ax.set_xlim(left=0)
+    ax.set_ylim(bottom=0)
+
+    plt.tight_layout(pad=.5)
     plt.show()
+
     pass
 
 
@@ -311,21 +379,18 @@ def bar_flood_prob(row):
     p = row['p']
     not_p = 1 - p
 
-    categories = ['Flooded', 'Not Flooded']
+    categories = ['Flood', 'No Flood']
     values = [p, not_p]
 
+    plt.rc('font', size=28)
     plt.figure(figsize=(8, 6))
-    bars = plt.bar(categories, values, color=['blue', 'green'])
-    plt.title('Probability of Flooding', fontsize=12, pad=15)
-    plt.xlabel('Condition', fontsize=10)
-    plt.ylabel('Probability', fontsize=10)
+    bars = plt.bar(categories, values, color=['#C4303E', '#006AAE'])
+    plt.ylabel('Probability')
     plt.ylim(0, 1)
 
-    for bar in bars:
+    for bar, va, of, c in zip(bars, ['bottom', 'top'], [0, -0.02], ['black', 'white']):
         height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width() / 2., height,
-                 f'{height:.4f}',
-                 ha='center', va='bottom')
+        plt.text(bar.get_x() + bar.get_width() / 2., height + of,f'{height:.4f}', ha='center', va=va, color=c)
 
     plt.tight_layout()
     plt.show()

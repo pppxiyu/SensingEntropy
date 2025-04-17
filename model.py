@@ -353,7 +353,7 @@ class TrafficBayesNetwork:
                     if len(parents) == 1:
                         h_parents = self.calculate_gmm_entropy_approximation(marginals[parents[0]])
                     else:
-                        # NOTE: Joint dist of parent nodes is needed here.
+                        # NOTE: Joint dist_w_obs of parent nodes is needed here.
                         # But we can assume that upstream roads are independent.
                         # Thus, the sum of marginal entropies could be used here.
                         h_parents = sum(
@@ -364,7 +364,7 @@ class TrafficBayesNetwork:
                     if verbose > 1:
                         print(f"Node {node}: H({node}|{parents}) = {conditional_entropy:.4f}")
                 else:
-                    raise ValueError('Missing join dist for calculate conditional entropy.')
+                    raise ValueError('Missing join dist_w_obs for calculate conditional entropy.')
         if verbose >= 1:
             print(f"Total Entropy of the Bayesian Network: {total_entropy:.8f}")
         return total_entropy
@@ -469,8 +469,8 @@ class TrafficBayesNetwork:
 
     def calculate_network_conditional_entropy(self, network_list, verbose=1):
         # Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
-        # Example: 0.01 * entropy {network updated with flood time dist}
-        # + 0.99 * entropy {network with non-flood time dist}
+        # Example: 0.01 * entropy {network updated with flood time dist_w_obs}
+        # + 0.99 * entropy {network with non-flood time dist_w_obs}
         entropy = 0
         for n in network_list:
             entropy += n['p'] * self.calculate_network_entropy(
