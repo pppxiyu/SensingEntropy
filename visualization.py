@@ -45,15 +45,17 @@ def _road_geo_directional_shift(geom, direction, offset=0.001):
 def map_roads_n_topology_plt(
     geo_roads=None,
     network=None, network_geo_roads=None,
-    local_crs="EPSG:2263", shift=True, city_shp_path='./data/nybb_25a/nybb.shp', offset=0.0015
+    local_crs="EPSG:2263", shift=True, city_shp_path=None, offset=0.0015
 ):
     import geopandas as gpd
     import networkx as nx
 
-    # base map
-    geo_city = gpd.read_file(city_shp_path).to_crs(local_crs)
     fig, ax = plt.subplots(figsize=(10, 10))
-    geo_city.plot(ax=ax, facecolor='lightgray', edgecolor='none')
+
+    # base map
+    if city_shp_path is not None:
+        geo_city = gpd.read_file(city_shp_path).to_crs(local_crs)
+        geo_city.plot(ax=ax, facecolor='lightgray', edgecolor='none')
 
     # roads
     if geo_roads is not None:
@@ -190,6 +192,47 @@ def map_flood_p(gdf, p, mapbox_token, local_crs):
     fig.show(renderer="browser")
 
 
+def map_roads_w_values(
+        geo_roads, values, local_crs="EPSG:2263",
+        shift=True, city_shp_path=None, offset=0.0015
+):
+    import geopandas as gpd
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # base map
+    if city_shp_path is not None:
+        geo_city = gpd.read_file(city_shp_path).to_crs(local_crs)
+        geo_city.plot(ax=ax, facecolor='lightgray', edgecolor='none')
+
+    # roads
+    roads = geo_roads.copy()
+    if shift:
+        roads['direction'] = roads['geometry'].apply(_road_geo_get_direction)
+        roads['geometry'] = roads.apply(
+            lambda row: _road_geo_directional_shift(row['geometry'], row['direction'], offset=offset),
+            axis=1
+        )
+    roads["value"] = roads['link_id'].map(values)
+    roads.to_crs(local_crs).plot(
+        ax=ax, column="value", cmap="viridis", linewidth=1.5, legend=True,
+        missing_kwds={"color": "#c5c5c5", "label": "no data"},
+        legend_kwds={"shrink": 0.6,},
+    )
+
+    # show
+    ax.set_axis_off()
+    ax.set_xlim(geo_city.total_bounds[0], geo_city.total_bounds[2])
+    ax.set_ylim(geo_city.total_bounds[1], geo_city.total_bounds[3])
+    cax = ax.get_figure().axes[-1]
+    for spine in cax.spines.values():
+        spine.set_visible(False)
+    cax.tick_params(labelsize=16)
+    cax.set_ylabel("Network entropy", fontsize=18,)
+    plt.tight_layout(pad=.5)
+    plt.show()
+    return
+
+
 def dist_gmm_1d(gmm, speed_range=None,):
     import numpy as np
     from scipy.stats import norm
@@ -239,7 +282,7 @@ def dist_histo_gmm_1d(speeds, gmm, bins=30):
     return
 
 
-def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90)):
+def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90), z_limit=None, return_z_max=False):
     import numpy as np
     from scipy.stats import multivariate_normal
 
@@ -277,7 +320,10 @@ def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90)):
     ax.ticklabel_format(axis='z', style='sci', scilimits=(-2, 2))
     ax.zaxis.get_offset_text().set_fontsize(12)  # scientific notation
 
-    ax.set_zlim(bottom=Z.min(),)
+    if z_limit is not None:
+        ax.set_zlim(Z.min(), z_limit)
+    else:
+        ax.set_zlim(Z.min(),)
     ax.set_xlim(x.min(), x.max())
     ax.set_xlim(ax.get_xlim()[::-1])
     ax.set_ylim(y.min(), y.max())  # tight config
@@ -306,6 +352,9 @@ def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90)):
     ax.set_yticks(yticks)  # spase label
 
     plt.show()
+
+    if return_z_max:
+        return ax.get_zlim()[1]
 
 
 def dist_discrete_gmm(dist_w_obs, gmm_wo_abs=None, close_curve=[]):
@@ -395,10 +444,4 @@ def bar_flood_prob(row):
     plt.tight_layout()
     plt.show()
 
-
-def heatmap_corr(matrix):
-    import seaborn as sns
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(matrix, annot=False, fmt=".2f", cmap="coolwarm", linewidths=0.5)
-    plt.show()
 

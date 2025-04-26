@@ -145,7 +145,7 @@ class RoadData:
 
         df = pd.read_csv(dir_file,  dtype={'Due Date': str})
         df = df[~df['Location'].isna()]
-        df['Location'] = df['Location'].apply(loads)
+        df.loc[:, 'Location'] = df['Location'].apply(loads)
 
         gdf = df.rename(columns={
             'Location': 'geometry', 'Unique Key': 'id', 'Created Date': 'time_create', 'Closed Date': 'time_close',
