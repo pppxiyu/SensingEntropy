@@ -170,6 +170,7 @@ class RoadData:
         ]
         closure_refine = closure_refine[['id', 'geometry', 'time_create', 'link_id']]
         closure_refine = closure_refine.to_crs(epsg=4326)
+        closure_refine['id'] = closure_refine['id'].astype(str)
         self.closures = closure_refine
         return closure_refine
 

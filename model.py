@@ -10,7 +10,6 @@ class TrafficBayesNetwork:
         self.network = None
         self.network_mode = None
         self.gmm_per_road = None
-        self.closure_p_per_segment = None
         self.gmm_joint_road_road = None
         self.gmm_joint_flood_road = None
         self.n_samples = n_samples
@@ -36,26 +35,13 @@ class TrafficBayesNetwork:
                 best_gmm = gmm
         return best_gmm
 
-    def fit_speed(self, df,):
+    def fit_marginal(self, df, ):
         segment_gmms = {}
-        for segment, data in df.groupby("link_id"):
+        for segment, data in df.copy().groupby("link_id"):
             speeds = data["speed"].values.reshape(-1, 1)
             best_gmm = self._optimal_gmm(speeds,)
             segment_gmms[segment] = best_gmm
         self.gmm_per_road = segment_gmms
-        return
-
-    def fit_flood(self, closures, interval='1D', if_vis=False):
-        if if_vis:
-            vis.bar_closure_count_over_time(closures.copy())
-        pass
-        closures = closures.copy().set_index('time_create')
-        closure_count = closures.groupby('link_id').count()['id']
-        daily_counts = closures.resample(interval).size().fillna(0)
-        flooding_day_count = len(daily_counts[daily_counts > 0])
-        closure_count_p = closure_count / flooding_day_count
-        closure_count_p = closure_count_p.reset_index().rename(columns={'id': 'p'})
-        self.closure_p_per_segment = closure_count_p
         return
 
     @staticmethod
@@ -249,7 +235,7 @@ class TrafficBayesNetwork:
             graph.remove_edge(*edge_to_remove)
         return list(graph.edges())
 
-    def fit_joint_speed_n_speed(self, df,):
+    def fit_joint(self, df, ):
         dependency_gmms = {}
         i = 0
         for child in self.network.nodes():
@@ -288,11 +274,11 @@ class TrafficBayesNetwork:
         self.gmm_joint_road_road = dependency_gmms
         return
 
-    def fit_joint_flood_n_speed(self, flood_time, speed, verbose=0):
+    def fit_joint_flood_n_speed(self, flood_time, speed, flood_prob, verbose=0):
         import warnings
 
         dists = {}
-        for _, row in self.closure_p_per_segment.iterrows():
+        for _, row in flood_prob.iterrows():
             link_id = row['link_id']
             p_flood = row['p']
 
@@ -376,7 +362,7 @@ class TrafficBayesNetwork:
             print(f"Total Entropy of the Bayesian Network: {total_entropy}")
         return total_entropy
 
-    def update_bayesian_network(
+    def update_joints(
             self, orig_joint, orig_xk_gmm, observed_xk_gmm, link_name, parent_ids,
     ):
         # sample from original joint, p(A, B_1, B_2), for example
@@ -442,7 +428,56 @@ class TrafficBayesNetwork:
                 assert current_node in parent_ids
 
                 # update joint
-                resampled_joint_samples = self.update_bayesian_network(
+                resampled_joint_samples = self.update_joints(
+                    joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
+                    current_node, parent_ids,
+                )
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
+                joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
+                if verbose > 0:
+                    print(f"Updated joint for {child} with parents {parent_ids}")
+
+                # update marginal
+                resampled_child_samples = resampled_joint_samples[:, [0]]
+                new_child_gmm = self._optimal_gmm(resampled_child_samples,)
+                marginals_updated[child] = new_child_gmm
+                if verbose > 0:
+                    print(f"Updated marginal for {child}")
+
+                queue.put(child)
+
+        return marginals_updated, joints_updated
+
+    def update_network_with_soft_evidence_2(
+            self, link_name, observed_marginal, marginals, joints, verbose=1
+    ):
+        import copy
+        from queue import Queue
+        marginals_updated = copy.deepcopy(marginals)
+        marginals_fixed = copy.deepcopy(marginals)
+        joints_updated = copy.deepcopy(joints)
+
+        if observed_marginal is None:
+            return marginals_updated, joints_updated
+
+        queue = Queue()
+        queue.put(link_name)
+        processed = set()
+        marginals_updated[link_name] = observed_marginal
+
+        while not queue.empty():
+            current_node = queue.get()
+            if current_node in processed:
+                continue
+            processed.add(current_node)
+
+            for child in self.network.successors(current_node):
+                assert child in joints_updated
+                parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
+                assert current_node in parent_ids
+
+                # update joint
+                resampled_joint_samples = self.update_joints(
                     joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
                     current_node, parent_ids,
                 )
@@ -474,4 +509,256 @@ class TrafficBayesNetwork:
         if verbose > 0:
             print(f"Total Entropy of the Bayesian Network: {entropy}")
         return entropy
+
+    def get_entropy_with_signals(self, bayes_joints, bayes_marginal, signal_dict, if_vis=False):
+        entropies = {}
+        for k, v in signal_dict.items():
+            if (v['speed_no_flood'] is not None) and (v['speed_flood'] is not None):
+                marginals_no_flood, joints_no_flood = self.update_network_with_soft_evidence(
+                    k, v['speed_no_flood'], bayes_marginal, bayes_joints, verbose=0
+                )
+                marginals_flood, joints_flood = self.update_network_with_soft_evidence(
+                    k, v['speed_flood'], bayes_marginal, bayes_joints, verbose=0
+                )
+                entropies[k] = self.calculate_network_conditional_entropy([
+                    {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
+                    {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
+                ])
+
+                if if_vis:
+                    if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
+                        z_max = vis.dist_gmm_3d(joints_flood[k][1], k, joints_flood[k][0][0], return_z_max=True)
+                        vis.dist_gmm_3d(bayes_joints[k][1], k, bayes_joints[k][0][0], z_limit=z_max
+                        )  # FIGURE 4: joint distributions changes
+        return entropies
+
+
+class FloodBayesNetwork:
+    def __init__(self, t_window='D'):
+        """
+        :param t_window: the unit for processing flood data, default is day
+        """
+        self.t_window = t_window
+        self.network = None
+        self.marginals = None
+        self.conditionals = None
+        self.network_bayes = None
+
+    def fit_marginal(self, df, if_vis=False):
+        """
+        df should contain time_create, id, and link_id col
+        time_create col is the start time of the road closure
+        link_id col is the id of the road
+        id col is the id of the closure
+        """
+        from pandas.api.types import is_datetime64_ns_dtype
+        from pandas.api.types import is_string_dtype
+        assert 'time_create' in df.columns, 'Column time_create not found in the DataFrame'
+        assert is_datetime64_ns_dtype(df['time_create']), 'Column time_create is not in type datetime64[ns]'
+        assert 'link_id' in df.columns, 'Column link_id not found in the DataFrame'
+        assert is_string_dtype(df['link_id']), 'Column link_id is not of string type'
+        assert 'id' in df.columns, 'Column id not found in the DataFrame'
+        assert is_string_dtype(df['id']), 'Column id is not of string type'
+
+        if if_vis:
+            vis.bar_closure_count_over_time(df.copy())
+        pass
+        df = df.copy().set_index('time_create')
+        closure_count = df.groupby('link_id').count()['id']
+        daily_counts = df.resample(self.t_window).size().fillna(0)
+        flooding_day_count = len(daily_counts[daily_counts > 0])
+        closure_count_p = closure_count / flooding_day_count
+        closure_count_p = closure_count_p.reset_index().rename(columns={'id': 'p'})
+        self.marginals = closure_count_p
+        return
+
+    def build_network_by_co_occurrence(self, df, weight_thr=0, report=False):
+        """
+        df should contain time_create and link_id col
+        time_create col is the start time of the road closure
+        link_id col is the id of the road
+
+        weight_thr: edges with weights below the threshold will be removed
+
+        Note that the network topology is not perfectly defined. Please consider the facts below:
+
+        Co-occurrence network is used to define the topology, and it is problematic when the
+        occurrence of flooding is rare because of the lack of samples.
+
+        The algo below would produce double connections between two nodes, e.g., A to B and B to A,
+        so the connection with lower weight was removed.
+
+        The temporal dimension is not considered. B happens after A (not just co-occurrence) has more
+        useful information.
+
+        Considering the elevation of roads could be helpful.
+        """
+
+        import networkx as nx
+
+        _, occurrence, co_occurrence = self.process_raw_flood_data(df.copy())
+
+        graph = nx.DiGraph()
+        graph.add_nodes_from(df.copy()['link_id'].unique())
+        for node in graph.nodes:
+            graph.nodes[node]['occurrence'] = occurrence[node]
+        for (a, b), count in co_occurrence.items():
+            prob = count / occurrence[a]
+            graph.add_edge(a, b, weight=prob)
+
+        graph, _ = self.remove_min_weight_feedback_arcs(graph)
+
+        assert isinstance(weight_thr, float), "weight_thr should be a float"
+        edges_to_remove = [
+            (u, v) for u, v, d in graph.edges(data=True)
+            if d.get('weight', 0) < weight_thr
+        ]
+        graph.remove_edges_from(edges_to_remove)
+
+        if report:
+            for node, indegree in graph.in_degree():
+                print(f"Node {node}: in-degree = {indegree}")
+        self.network = graph
+        return
+
+    def fit_conditional(self, df,):
+        """
+        df should contain time_create and link_id col
+        time_create col is the start time of the road closure
+        link_id col is the id of the road
+        """
+
+        from collections import defaultdict
+
+        incident_count, occurrence, co_occurrence = self.process_raw_flood_data(df.copy())
+
+        conditionals = defaultdict(dict)
+        for edge in list(self.network.edges()):
+            parent, child = edge[0], edge[1]
+
+            n_a = occurrence.get(parent, 0)
+            n_b = occurrence.get(child, 0)
+            n_ab = co_occurrence.get((parent, child), 0)
+
+            p_b1_given_a1 = n_ab / n_a
+            p_b0_given_a1 = 1 - p_b1_given_a1
+            p_b1_given_a0 = (n_b - n_ab) / (incident_count - n_a)
+            p_b0_given_a0 = 1 - p_b1_given_a0
+
+            conditionals[(parent, child)] = {
+                '1_1': p_b1_given_a1, '0_1': p_b0_given_a1,'1_0': p_b1_given_a0, '0_0': p_b0_given_a0
+            }
+
+        self.conditionals = conditionals
+        return
+
+    def build_bayes_network(self):
+        from pgmpy.models import BayesianNetwork
+        from pgmpy.factors.discrete import TabularCPD
+        import networkx as nx
+
+        edges = list(self.network.edges())
+        network_bayes = BayesianNetwork(edges)
+
+        conditionals = []
+        for node in self.network.nodes:  # add info for nodes w/o parent
+            if self.network.in_degree(node) == 0:
+                p_flood = self.marginals.loc[self.marginals['link_id'] == node, 'p'].values[0]
+                mpd = TabularCPD(
+                    variable=node,
+                    variable_card=2,
+                    values=[[p_flood], [1 - p_flood]],
+                    state_names={node: ['flooded', 'not flooded']},
+                )
+                conditionals.append(mpd)
+
+            else:
+                parents = list(nx.ancestors(self.network, node))  # add info for nodes w parent
+                cpd = TabularCPD(
+                    variable=node,
+                    variable_card=2,
+                    evidence=parents,
+                    evidence_card=[2] * len(parents),
+                    values=[
+                        [1 - epsilon, weight],  # P(child=0 | parent=0), P(child=0 | parent=1)
+                        [epsilon, 1 - weight]  # P(child=1 | parent=0), P(child=1 | parent=1)
+                    ],
+
+                )
+                conditionals.append(cpd)
+
+        network_bayes.add_cpds(*conditionals)
+
+        return
+
+    @staticmethod
+    def remove_min_weight_feedback_arcs(graph):
+        import networkx as nx
+
+        graph = graph.copy()
+        removed_edges = []
+
+        while not nx.is_directed_acyclic_graph(graph):
+            try:
+                cycle = next(nx.simple_cycles(graph))
+            except StopIteration:
+                break
+
+            min_weight = float('inf')
+            min_edge = None
+
+            for i in range(len(cycle)):
+                u, v = cycle[i], cycle[(i + 1) % len(cycle)]
+                w = graph[u][v].get('weight',)
+                if w < min_weight:
+                    min_weight = w
+                    min_edge = (u, v)
+
+            graph.remove_edge(*min_edge)
+            removed_edges.append(min_edge)
+
+        return graph, removed_edges
+
+    def process_raw_flood_data(self, df):
+        from pandas.api.types import is_datetime64_ns_dtype
+        from pandas.api.types import is_string_dtype
+        from collections import defaultdict
+        from itertools import permutations
+
+        assert 'time_create' in df.columns, 'Column time_create not found in the DataFrame'
+        assert is_datetime64_ns_dtype(df['time_create']), 'Column time_create is not in type datetime64[ns]'
+        assert 'link_id' in df.columns, 'Column link_id not found in the DataFrame'
+        assert is_string_dtype(df['link_id']), 'Column link_id is not of string type'
+
+        df.loc[:, 'time_bin'] = df['time_create'].dt.floor(self.t_window)
+        time_groups = df.groupby('time_bin')['link_id'].apply(set)
+        occurrence = defaultdict(int)
+        co_occurrence = defaultdict(int)
+        for links in time_groups:
+            for a in links:
+                occurrence[a] += 1
+            for a, b in permutations(links, 2):
+                co_occurrence[(a, b)] += 1
+
+        return len(time_groups), occurrence, co_occurrence
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
