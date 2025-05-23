@@ -750,6 +750,26 @@ class FloodBayesNetwork:
                 )
                 print(self.marginals.loc[self.marginals['link_id'] == node, 'p'].values[0], p[1])
 
+    def infer_w_evidence(self, target_node, evidence):
+        """
+        Get the probability of flooding for roads and return 'flooded roads' with a threshold.
+        Example input:
+            target_node = 'A'
+            evidence = {'B': 1, 'C': 0}, where 1 = flooded, 0 = not flooded
+        """
+        from pgmpy.inference import VariableElimination
+        assert isinstance(target_node, str), "target_node must be a string."
+        assert target_node in self.network_bayes.nodes, f"{target_node} is not in the network."
+        assert isinstance(evidence, dict), "evidence must be a dictionary."
+        for node, state in evidence.items():
+            assert isinstance(node, str), f"Evidence key '{node}' must be a string."
+            assert node in self.network_bayes.nodes, f"Evidence node '{node}' is not in the network."
+            assert state in [0, 1], f"Evidence value for '{node}' must be 0 or 1, got {state}."
+
+        inference = VariableElimination(self.network_bayes)
+        result = inference.query(variables=[target_node], evidence=evidence)
+        p = result.values
+        return p
 
     @staticmethod
     def remove_min_weight_feedback_arcs(graph):
