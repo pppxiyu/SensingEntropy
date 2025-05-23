@@ -39,6 +39,7 @@ bayes_network_f.fit_marginal(road_data.closures)
 bayes_network_f.build_network_by_co_occurrence(road_data.closures,  weight_thr=0.2)
 bayes_network_f.fit_conditional(road_data.closures)
 bayes_network_f.build_bayes_network()
+bayes_network_f.check_bayesian_network()
 
 # Fit marginals - speed
 bayes_network_t = mo.TrafficBayesNetwork(10000, 3)

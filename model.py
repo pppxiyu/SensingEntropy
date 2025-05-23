@@ -563,10 +563,13 @@ class FloodBayesNetwork:
         if if_vis:
             vis.bar_closure_count_over_time(df.copy())
         pass
-        df = df.copy().set_index('time_create')
+
+        df.loc[:, 'time_bin'] = df['time_create'].dt.floor(self.t_window)
+        df = df.drop_duplicates(subset=['link_id', 'time_bin'])
+
+        flooding_day_count = df['time_bin'].nunique()
         closure_count = df.groupby('link_id').count()['id']
-        daily_counts = df.resample(self.t_window).size().fillna(0)
-        flooding_day_count = len(daily_counts[daily_counts > 0])
+
         closure_count_p = closure_count / flooding_day_count
         closure_count_p = closure_count_p.reset_index().rename(columns={'id': 'p'})
         self.marginals = closure_count_p
@@ -662,7 +665,10 @@ class FloodBayesNetwork:
                         counts[state]['occur'] += 1
                         if node in flood_road:
                             counts[state]['co-occur'] += 1
+
             assert sum([v['occur'] for k, v in counts.items()]) == len(time_groups), 'Count inconsistent.'
+            assert (sum([v['co-occur'] for k, v in counts.items()]) / len(time_groups)
+                    == self.marginals.loc[self.marginals['link_id'] == node, 'p'].values), 'Count inconsistent.'
 
             cond_probs = {}
             for k, v in counts.items():
@@ -700,7 +706,6 @@ class FloodBayesNetwork:
                     variable=node,
                     variable_card=2,
                     values=[[1 - p_flood], [p_flood]],
-                    state_names={node: ['not flooded', 'flooded']},
                 )
                 network_bayes.add_cpds(mpd)
 
@@ -719,13 +724,31 @@ class FloodBayesNetwork:
                 )
                 network_bayes.add_cpds(cpd)
 
-        self.network = network_bayes
+        self.network_bayes = network_bayes
         return
 
     def check_bayesian_network(self):
         """
         Check if the inferred p of flooding for nodes is consistent with the p calculated as marginals.
         """
+        from pgmpy.inference import VariableElimination
+
+        inference = VariableElimination(self.network_bayes)
+        for node in self.network_bayes.nodes():
+            if self.network_bayes.in_degree(node) == 0:
+                continue
+            p = inference.query(variables=[node]).values
+
+            if self.marginals.loc[self.marginals['link_id'] == node, 'p'].values[0] != p[1]:
+                import warnings
+                warnings.warn(
+                    """
+                        Probability in Bayesian Network and fitted marginals should be the same 
+                        before any observations. There could be small differences becasue of numerical issue.
+                        Check that manually if they are not the same.
+                    """
+                )
+                print(self.marginals.loc[self.marginals['link_id'] == node, 'p'].values[0], p[1])
 
 
     @staticmethod
