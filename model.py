@@ -621,7 +621,7 @@ class FloodBayesNetwork:
         self.network = graph
         return
 
-    def fit_conditional(self, df,):
+    def fit_conditional(self, df):
         """
         df should contain time_create and link_id col
         time_create col is the start time of the road closure
@@ -629,24 +629,54 @@ class FloodBayesNetwork:
         """
 
         from collections import defaultdict
+        from itertools import product
 
-        incident_count, occurrence, co_occurrence = self.process_raw_flood_data(df.copy())
-
+        time_groups, _, _ = self.process_raw_flood_data(df.copy())
         conditionals = defaultdict(dict)
-        for edge in list(self.network.edges()):
-            parent, child = edge[0], edge[1]
 
-            n_a = occurrence.get(parent, 0)
-            n_b = occurrence.get(child, 0)
-            n_ab = co_occurrence.get((parent, child), 0)
+        for node in self.network.nodes:
+            parents = list(self.network.predecessors(node))
+            if len(parents) == 0:
+                continue
+            if len(parents) > 4:
+                import warnings
+                warnings.warn(
+                    f"""
+                    Time complexity of this step is 2^n. n = {len(parents)} right now.
+                    Larger n could also potentially cause the sparsity issue.
+                    Try tuning the weight threshold to mitigate this issue. 
+                    """
+                )
 
-            p_b1_given_a1 = n_ab / n_a
-            p_b0_given_a1 = 1 - p_b1_given_a1
-            p_b1_given_a0 = (n_b - n_ab) / (incident_count - n_a)
-            p_b0_given_a0 = 1 - p_b1_given_a0
+            parent_states = list(product([0, 1], repeat=len(parents)))
+            counts = {state: {'co-occur': 0, 'occur': 0} for state in parent_states}
 
-            conditionals[(parent, child)] = {
-                '1_1': p_b1_given_a1, '0_1': p_b0_given_a1,'1_0': p_b1_given_a0, '0_0': p_b0_given_a0
+            for _, flood_road in time_groups.items():
+                # check which parent state does the flood incident go to
+                for state in parent_states:
+                    parent_state_matches = all(
+                        (p in flood_road) == bool(s)  # if p is flooded matches state under checking
+                        for p, s in zip(parents, state)
+                    )
+                    if parent_state_matches:
+                        counts[state]['occur'] += 1
+                        if node in flood_road:
+                            counts[state]['co-occur'] += 1
+            assert sum([v['occur'] for k, v in counts.items()]) == len(time_groups), 'Count inconsistent.'
+
+            cond_probs = {}
+            for k, v in counts.items():
+                parents_occur_count = v['occur']
+                co_occur_count = v['co-occur']
+                if parents_occur_count == 0:
+                    p = 0
+                else:
+                    p = co_occur_count / parents_occur_count
+                cond_probs[k] = p
+
+            conditionals[node] = {
+                'parents': parents,
+                'conditionals': cond_probs
             }
 
         self.conditionals = conditionals
@@ -655,41 +685,48 @@ class FloodBayesNetwork:
     def build_bayes_network(self):
         from pgmpy.models import BayesianNetwork
         from pgmpy.factors.discrete import TabularCPD
-        import networkx as nx
+        from itertools import product
 
         edges = list(self.network.edges())
         network_bayes = BayesianNetwork(edges)
 
-        conditionals = []
         for node in self.network.nodes:  # add info for nodes w/o parent
+            if self.network.degree(node) == 0:
+                continue
+
             if self.network.in_degree(node) == 0:
                 p_flood = self.marginals.loc[self.marginals['link_id'] == node, 'p'].values[0]
                 mpd = TabularCPD(
                     variable=node,
                     variable_card=2,
-                    values=[[p_flood], [1 - p_flood]],
-                    state_names={node: ['flooded', 'not flooded']},
+                    values=[[1 - p_flood], [p_flood]],
+                    state_names={node: ['not flooded', 'flooded']},
                 )
-                conditionals.append(mpd)
+                network_bayes.add_cpds(mpd)
 
-            else:
-                parents = list(nx.ancestors(self.network, node))  # add info for nodes w parent
+            else:  # add info for nodes w parent
+                parents = self.conditionals[node]['parents']
+                parent_states = list(product([0, 1], repeat=len(parents)))
+                p1 = [self.conditionals[node]['conditionals'].get(state) for state in parent_states]
+                p0 = [1 - p for p in p1]
+
                 cpd = TabularCPD(
                     variable=node,
                     variable_card=2,
                     evidence=parents,
                     evidence_card=[2] * len(parents),
-                    values=[
-                        [1 - epsilon, weight],  # P(child=0 | parent=0), P(child=0 | parent=1)
-                        [epsilon, 1 - weight]  # P(child=1 | parent=0), P(child=1 | parent=1)
-                    ],
-
+                    values=[p0, p1],
                 )
-                conditionals.append(cpd)
+                network_bayes.add_cpds(cpd)
 
-        network_bayes.add_cpds(*conditionals)
-
+        self.network = network_bayes
         return
+
+    def check_bayesian_network(self):
+        """
+        Check if the inferred p of flooding for nodes is consistent with the p calculated as marginals.
+        """
+
 
     @staticmethod
     def remove_min_weight_feedback_arcs(graph):
@@ -740,7 +777,7 @@ class FloodBayesNetwork:
             for a, b in permutations(links, 2):
                 co_occurrence[(a, b)] += 1
 
-        return len(time_groups), occurrence, co_occurrence
+        return time_groups, occurrence, co_occurrence
 
 
 
