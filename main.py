@@ -86,15 +86,22 @@ print()
 entropies = {}
 for k, v in bayes_network_t.gmm_joint_flood_road.items():
     if (v['speed_no_flood'] is not None) and (v['speed_flood'] is not None):
-        fld, n_fld = bayes_network_f.infer_node_states(k, 0, 0.75, 1)
-        # marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_soft_evidence(
-        #     k, v['speed_no_flood'], bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
+        # inferred_signals_no_flood = bayes_network_t.convert_state_to_dist(
+        #     bayes_network_f.infer_node_states(k, 0, 1, 1)
+        # )
+        # marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
+        #     {**{k: v['speed_no_flood']}, **inferred_signals_no_flood},
+        #     bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
         # )
 
-        fld, n_fld = bayes_network_f.infer_node_states(k, 1, 0.75, 1)
-        # marginals_flood, joints_flood = bayes_network_t.update_network_with_soft_evidence(
-        #     k, v['speed_flood'], bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-        # )
+        inferred_signals_flood = bayes_network_t.convert_state_to_dist(
+            bayes_network_f.infer_node_states(k, 1, 1, 1)
+        )
+        if inferred_signals_flood:
+            marginals_flood, joints_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
+                {**{k: v['speed_flood']}, **inferred_signals_flood},
+                bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
+            )
 
         # entropies[k] = bayes_network_t.calculate_network_conditional_entropy([
         #     {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},

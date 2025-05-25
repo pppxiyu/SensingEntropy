@@ -1,8 +1,10 @@
 import numpy as np
+import pandas as pd
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 from sklearn.mixture import GaussianMixture
 import visualization as vis
+import networkx as nx
 
 
 class TrafficBayesNetwork:
@@ -94,7 +96,6 @@ class TrafficBayesNetwork:
             return graph
 
     def build_network_from_geo(self, gdf, mode='causal', remove_no_data_segment=True):
-        import networkx as nx
         graph = nx.DiGraph()
 
         segment_groups = {}
@@ -223,7 +224,6 @@ class TrafficBayesNetwork:
 
     @staticmethod
     def _remove_cycles(edges):
-        import networkx as nx
         graph = nx.DiGraph(edges)
         while not nx.is_directed_acyclic_graph(graph):
             cycles = list(nx.simple_cycles(graph))
@@ -326,7 +326,6 @@ class TrafficBayesNetwork:
         return entropy
 
     def calculate_network_entropy(self, marginals=None, joints=None, verbose=1):
-        import networkx as nx
         # if the node has no parent, the marginal was used
         # if the node has parents, joint and the marginal refitted from joint sampling was used
 
@@ -448,6 +447,55 @@ class TrafficBayesNetwork:
 
         return marginals_updated, joints_updated
 
+    def update_network_with_multiple_soft_evidence(
+            self, signal_dict, marginals, joints, verbose=1
+    ):
+        import copy
+        from queue import Queue
+        marginals_updated = copy.deepcopy(marginals)
+        marginals_fixed = copy.deepcopy(marginals)
+        joints_updated = copy.deepcopy(joints)
+
+        if observed_marginal is None:
+            return marginals_updated, joints_updated
+
+        queue = Queue()
+        queue.put(link_name)
+        processed = set()
+        marginals_updated[link_name] = observed_marginal
+
+        while not queue.empty():
+            current_node = queue.get()
+            if current_node in processed:
+                continue
+            processed.add(current_node)
+
+            for child in self.network.successors(current_node):
+                assert child in joints_updated
+                parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
+                assert current_node in parent_ids
+
+                # update joint
+                resampled_joint_samples = self.update_joints(
+                    joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
+                    current_node, parent_ids,
+                )
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
+                joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
+                if verbose > 0:
+                    print(f"Updated joint for {child} with parents {parent_ids}")
+
+                # update marginal
+                resampled_child_samples = resampled_joint_samples[:, [0]]
+                new_child_gmm = self._optimal_gmm(resampled_child_samples,)
+                marginals_updated[child] = new_child_gmm
+                if verbose > 0:
+                    print(f"Updated marginal for {child}")
+
+                queue.put(child)
+
+        return marginals_updated, joints_updated
+
     def calculate_network_conditional_entropy(self, network_list, verbose=1):
         # Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
         # Example: 0.01 * entropy {network updated with flood time dist_w_obs}
@@ -483,9 +531,23 @@ class TrafficBayesNetwork:
                         )  # FIGURE 4: joint distributions changes
         return entropies
 
+    def convert_state_to_dist(self, inferred_states):
+        signal = {
+            k: (
+                self.gmm_joint_flood_road[k]['speed_flood']
+                if v == 'flooded'
+                else self.gmm_joint_flood_road[k]['speed_no_flood']
+                if v == 'not flooded'
+                else None
+            )
+            for k, v in inferred_states.items()
+        }
+        cleaned_signal = {k: v for k, v in signal.items() if v is not None}
+        return cleaned_signal
+
 
 class FloodBayesNetwork:
-    def __init__(self, t_window='D'):
+    def __init__(self, t_window: str = 'D'):
         """
         :param t_window: the unit for processing flood data, default is day
         """
@@ -495,7 +557,7 @@ class FloodBayesNetwork:
         self.conditionals = None
         self.network_bayes = None
 
-    def fit_marginal(self, df, if_vis=False):
+    def fit_marginal(self, df: pd.DataFrame, if_vis=False):
         """
         df should contain time_create, id, and link_id col
         time_create col is the start time of the road closure
@@ -526,7 +588,9 @@ class FloodBayesNetwork:
         self.marginals = closure_count_p
         return
 
-    def build_network_by_co_occurrence(self, df, weight_thr=0, edge_thr=1, report=False):
+    def build_network_by_co_occurrence(
+            self, df: pd.DataFrame, weight_thr: float = 0, edge_thr: int = 1, report: bool = False
+    ):
         """
         df should contain time_create and link_id col
         time_create col is the start time of the road closure
@@ -549,8 +613,6 @@ class FloodBayesNetwork:
 
         Considering the elevation of roads could be helpful.
         """
-
-        import networkx as nx
 
         _, occurrence, co_occurrence = self.process_raw_flood_data(df.copy())
 
@@ -578,7 +640,7 @@ class FloodBayesNetwork:
         self.network = graph
         return
 
-    def fit_conditional(self, df):
+    def fit_conditional(self, df: pd.DataFrame):
         """
         df should contain time_create and link_id col
         time_create col is the start time of the road closure
@@ -704,7 +766,7 @@ class FloodBayesNetwork:
                 )
                 print(self.marginals.loc[self.marginals['link_id'] == node, 'p'].values[0], p[1])
 
-    def infer_w_evidence(self, target_node, evidence):
+    def infer_w_evidence(self, target_node: str, evidence: dict):
         """
         Get the probability of flooding for roads.
         Example input:
@@ -712,7 +774,6 @@ class FloodBayesNetwork:
             evidence = {'B': 1, 'C': 0}, where 1 = flooded, 0 = not flooded
         """
         from pgmpy.inference import VariableElimination
-        assert isinstance(target_node, str), "target_node must be a string."
         assert target_node in self.network_bayes.nodes, f"{target_node} is not in the network."
         assert isinstance(evidence, dict), "evidence must be a dictionary."
         for node, state in evidence.items():
@@ -745,15 +806,15 @@ class FloodBayesNetwork:
                 if p['not_flooded'] >= thr_not_flood:
                     not_flooded_nodes.append(n)
 
-            # print(f'flooded nodes: {flooded_nodes}')
-            # print(f'not_flooded_nodes: {not_flooded_nodes}')
-            # print()
-        return flooded_nodes, not_flooded_nodes
+        assert not set(flooded_nodes) & set(not_flooded_nodes), """
+        At least one road is regarded both flooded and not flooded
+        """
+        output = {i: 'flooded' for i in flooded_nodes}
+        output.update({i: 'not flooded' for i in not_flooded_nodes})
+        return output
 
     @staticmethod
-    def remove_min_weight_feedback_arcs(graph):
-        import networkx as nx
-
+    def remove_min_weight_feedback_arcs(graph: nx.DiGraph()):
         graph = graph.copy()
         removed_edges = []
 
@@ -778,7 +839,7 @@ class FloodBayesNetwork:
 
         return graph, removed_edges
 
-    def process_raw_flood_data(self, df):
+    def process_raw_flood_data(self, df: pd.DataFrame):
         from pandas.api.types import is_datetime64_ns_dtype
         from pandas.api.types import is_string_dtype
         from collections import defaultdict
