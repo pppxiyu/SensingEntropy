@@ -8,7 +8,9 @@ import numpy as np
 random.seed(0)
 np.random.seed(0)
 
-##### Data #####
+"""
+Data
+"""
 
 # Geometry manual processing
 road_data = dd.RoadData()
@@ -28,7 +30,9 @@ road_data.infer_flooding_time_per_road()
 road_data.pull_nyc_dot_traffic_flooding(dir_NYC_data_token)
 road_data.resample_nyc_dot_traffic(road_data.speed)
 
-##### Modeling #####
+"""
+Modeling
+"""
 
 # Fit marginals - flood
 bayes_network_f = mo.FloodBayesNetwork()
@@ -39,7 +43,6 @@ bayes_network_f.fit_marginal(road_data.closures)
 bayes_network_f.build_network_by_co_occurrence(road_data.closures,  weight_thr=0.2)
 bayes_network_f.fit_conditional(road_data.closures)
 bayes_network_f.build_bayes_network()
-bayes_network_f.check_bayesian_network()
 
 # Fit marginals - speed
 bayes_network_t = mo.TrafficBayesNetwork(10000, 3)
@@ -71,37 +74,32 @@ bayes_network_t.fit_joint_flood_n_speed(
 #     print(f'Distributions under observations at {k}')
 #     vis.dist_discrete_gmm(v, bayes_network_t.gmm_per_road[k],)  # FIGURE 3: distribution with observation
 
-##### Inference #####
+"""
+Inference and placement
+"""
 
 # Measure unobserved network entropy
 entropy_original = bayes_network_t.calculate_network_entropy()
 print()
 
 # Update network with observation; Measure long-term observed network entropy
-# entropies = {}
-# for k, v in bayes_network_t.gmm_joint_flood_road.items():
-#     if (v['speed_no_flood'] is not None) and (v['speed_flood'] is not None):
-#         marginals_w_signal, joints_w_signal = bayes_network_t.update_network_with_soft_evidence_2(
-#             k, v, bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-#         )
-#         entropies[k] = bayes_network_t.calculate_network_conditional_entropy([
-#             {'p': 1, 'marginals': marginals_w_signal, 'joints': joints_w_signal},
-#         ])
-
-
 entropies = {}
 for k, v in bayes_network_t.gmm_joint_flood_road.items():
     if (v['speed_no_flood'] is not None) and (v['speed_flood'] is not None):
-        marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_soft_evidence(
-            k, v['speed_no_flood'], bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-        )
-        marginals_flood, joints_flood = bayes_network_t.update_network_with_soft_evidence(
-            k, v['speed_flood'], bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-        )
-        entropies[k] = bayes_network_t.calculate_network_conditional_entropy([
-            {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
-            {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
-        ])
+        fld, n_fld = bayes_network_f.infer_node_states(k, 0, 0.75, 1)
+        # marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_soft_evidence(
+        #     k, v['speed_no_flood'], bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
+        # )
+
+        fld, n_fld = bayes_network_f.infer_node_states(k, 1, 0.75, 1)
+        # marginals_flood, joints_flood = bayes_network_t.update_network_with_soft_evidence(
+        #     k, v['speed_flood'], bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
+        # )
+
+        # entropies[k] = bayes_network_t.calculate_network_conditional_entropy([
+        #     {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
+        #     {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
+        # ])
         # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
         #     z_max = vis.dist_gmm_3d(joints_flood[k][1], k, joints_flood[k][0][0], return_z_max=True)
         #     vis.dist_gmm_3d(
@@ -109,34 +107,13 @@ for k, v in bayes_network_t.gmm_joint_flood_road.items():
         #         z_limit=z_max
         #     )  # FIGURE 4: joint distributions changes
 
+"""
+A function is needed here to combine the two posteriors by the selected sensor into one prior for iteration.
+"""
 
-# temp_joints, temp_marginal = bayes_network_t.gmm_joint_road_road, bayes_network_t.gmm_per_road
-# for _ in range(sensor_count):
-#     entropies = bayes_network_t.get_entropy_with_signals(
-#         temp_joints, temp_marginal, bayes_network_t.gmm_joint_flood_road, if_vis=False
-#     )
-#     loc = min(entropies, key=entropies.get)
-#     # vis.map_roads_w_values(
-#     #     road_data.geo.copy(), entropies, city_shp_path=dir_city_boundary
-#     # )  # FIGURE 6: entropy map
-#
-#     marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_soft_evidence(
-#         place, bayes_network_t.gmm_joint_flood_road[place]['speed_no_flood'],
-#         bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-#     )
-
-# # Place one sensor
 # vis.map_roads_w_values(
 #     road_data.geo.copy(), entropies, city_shp_path=dir_city_boundary
 # )  # FIGURE 6: entropy map
-#
-# # Place multiple sensors
-# marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_soft_evidence(
-#     place, bayes_network_t.gmm_joint_flood_road[place]['speed_no_flood'],
-#     bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-# )
-
-
 
 pass
 
