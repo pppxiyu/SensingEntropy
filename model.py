@@ -628,20 +628,24 @@ class TrafficBayesNetwork:
                 parent_ids = joints_updated[current_node]['parents']
                 joint_gmm = joints_updated[current_node]['joints']
                 resampled_joint_samples = self.update_joints_multi_variable(
-                    joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
-                    current_node, [current_node] + joints_updated[current_node]['parents'],
+                    joint_gmm,
+                    [marginals_fixed[current_node]], [marginals_updated[current_node]],
+                    [current_node], [current_node] + parent_ids,
                 )
 
-                new_joint_gmm = self._optimal_gmm(resampled_joint_samples, )
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
                 joints_updated[current_node] = {'parents': parent_ids, 'joints': new_joint_gmm}
 
                 if verbose > 0:
                     print(f"Updated joint for {child} with parents {parent_ids}")
 
                 # update marginal
-                resampled_child_samples = resampled_joint_samples[:, [0]]
-                new_child_gmm = self._optimal_gmm(resampled_child_samples, )
-                marginals_updated[child] = new_child_gmm
+                for p in parent_ids:
+                    all_id = [current_node] + parent_ids
+                    idx = all_id.index(p)
+                    resampled_child_samples = resampled_joint_samples[:, [idx]]
+                    new_child_gmm = self._optimal_gmm(resampled_child_samples, )
+                    marginals_updated[child] = new_child_gmm
 
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
@@ -649,6 +653,17 @@ class TrafficBayesNetwork:
                 queue.append(child)
 
         return marginals_updated, joints_updated
+
+    def update_network_with_multiple_soft_evidence(
+            self, signal_dict: dict, marginals_in, joints_in, verbose=1,
+    ):
+        marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_downward(
+            signal_dict, marginals_in, joints_in, verbose=verbose
+        )
+        marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_upward(
+            signal_dict, marginals_out, joints_out, verbose=verbose,
+        )
+        return marginals_out, joints_out
 
     def calculate_network_conditional_entropy(self, network_list, verbose=1):
         # Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
