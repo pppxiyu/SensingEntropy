@@ -361,16 +361,55 @@ class TrafficBayesNetwork:
             print(f"Total Entropy of the Bayesian Network: {total_entropy}")
         return total_entropy
 
-    def update_joints(
-            self, orig_joint, orig_xk_gmm, observed_xk_gmm, link_name, parent_ids,
+    def update_joints_legacy(
+            self, orig_joint, orig_xk, observed_xk, xk_name, all_parent_ids,
     ):
         # sample from original joint, p(A, B_1, B_2), for example
         joint_samples = orig_joint.sample(self.n_samples)[0]
-        xk_idx = parent_ids.index(link_name) + 1  # +1 because child is first
+        xk_idx = all_parent_ids.index(xk_name) + 1  # +1 because child is first
         xk_samples = joint_samples[:, [xk_idx]]
 
         # get the ratio term, p'(B_1)/p(B_1)
-        log_weights = observed_xk_gmm.score_samples(xk_samples) - orig_xk_gmm.score_samples(xk_samples)
+        log_weights = observed_xk.score_samples(xk_samples) - orig_xk.score_samples(xk_samples)
+        weights = np.exp(log_weights - np.max(log_weights))
+        weights /= weights.sum()
+
+        # apply the ratio term
+        indices = np.random.choice(self.n_samples, size=self.n_samples, p=weights, replace=True)
+        return joint_samples[indices]
+
+    def update_joints_multi_variable(
+            self, orig_joint, orig_xk_list: list, observed_xk_list: list, xk_name_list: list, all_ids: list,
+    ):
+        """
+        xk is the parent node who gets new information
+        orig_xk_list: original marginals of xk
+        observed_xk_list: observed marginals of xk
+        xk_name: the names of xk
+        all_ids: the names of all parent nodes, may be a big set than xk
+        """
+
+        assert len(orig_xk_list) == len(observed_xk_list) == len(xk_name_list)
+
+        # sample from original joint, p(A, B_1, B_2), for example
+        joint_samples = orig_joint.sample(self.n_samples)[0]
+        xk_idx_list = []
+        for xk_name in xk_name_list:
+            xk_idx = all_ids.index(xk_name)
+            xk_idx_list.append(xk_idx)
+        xk_samples = joint_samples[:, xk_idx_list]
+
+        # get the ratio term, p'(B_1)/p(B_1) or p'(B_1 B_2)/p(B_1 B_2,) etc.
+        # in the Bayesian Network, B_1 and B_2 are assumed to be independent
+        observed_xk_score = 1
+        for observed_xk, i in zip(observed_xk_list, range(len(xk_idx_list))):
+            observed_xk_score *= observed_xk.score_samples(xk_samples[:, [i]])
+
+        orig_xk_score = 1
+        for orig_xk, i in zip(orig_xk_list, range(len(xk_idx_list))):
+            orig_xk_score *= orig_xk.score_samples(xk_samples[:, [i]])
+
+        log_weights = observed_xk_score - orig_xk_score
         weights = np.exp(log_weights - np.max(log_weights))
         weights /= weights.sum()
 
@@ -398,9 +437,15 @@ class TrafficBayesNetwork:
         indices = np.random.choice(self.n_samples, size=self.n_samples, p=weights, replace=True)
         return joint_samples[indices]
 
-    def update_network_with_soft_evidence(
+    def update_network_with_soft_evidence_legacy(
             self, link_name, observed_marginal, marginals, joints, verbose=1
     ):
+        """
+        [IMPORTANT NOTE]
+        For nodes with multiple parent nodes, the algo below update the corresponding joint distribution
+        at separate steps depending on which direction does the information arrives first.
+        It would derive a plausible result in the dataset under development, but it is NOT fully correct.
+        """
         import copy
         from queue import Queue
         marginals_updated = copy.deepcopy(marginals)
@@ -423,11 +468,12 @@ class TrafficBayesNetwork:
 
             for child in self.network.successors(current_node):
                 assert child in joints_updated
+
                 parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
                 assert current_node in parent_ids
 
                 # update joint
-                resampled_joint_samples = self.update_joints(
+                resampled_joint_samples = self.update_joints_legacy(
                     joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
                     current_node, parent_ids,
                 )
@@ -447,41 +493,70 @@ class TrafficBayesNetwork:
 
         return marginals_updated, joints_updated
 
-    def update_network_with_multiple_soft_evidence(
-            self, signal_dict, marginals, joints, verbose=1
+    def update_network_with_multiple_soft_evidence_downward(
+            self, signal_dict: dict, marginals, joints, verbose=1,
     ):
         import copy
-        from queue import Queue
+        from collections import defaultdict, deque
+
         marginals_updated = copy.deepcopy(marginals)
         marginals_fixed = copy.deepcopy(marginals)
         joints_updated = copy.deepcopy(joints)
 
-        if observed_marginal is None:
+        signal_dict = {k: v for k, v in signal_dict.items() if v is not None}
+        if not signal_dict:
             return marginals_updated, joints_updated
 
-        queue = Queue()
-        queue.put(link_name)
-        processed = set()
-        marginals_updated[link_name] = observed_marginal
-
-        while not queue.empty():
-            current_node = queue.get()
-            if current_node in processed:
+        # traverse the graph and record the parents affected by information propagation for each node
+        reachable = defaultdict(list)  # records reachable parents by the information propagation
+        queue_0 = deque(set(signal_dict.keys()))
+        visited_0 = set()
+        while queue_0:
+            current_node_0 = queue_0.popleft()
+            if current_node_0 in visited_0:
                 continue
-            processed.add(current_node)
+            visited_0.add(current_node_0)
+            for child_0 in self.network.successors(current_node_0):
+                reachable[child_0].append(current_node_0)
+                queue_0.append(child_0)
+
+        remaining_parents_n = {
+            node: len([p for p in self.network.predecessors(node) if p in reachable[node]])
+            for node in self.network.nodes
+        }
+
+        # core algo below
+        queue = deque(set(signal_dict.keys()))
+        visited = set()
+        for n, gmm in signal_dict.items():
+            marginals_updated[n] = gmm
+
+        while queue:
+            current_node = queue.popleft()
+            if current_node in visited:
+                continue
+            visited.add(current_node)
 
             for child in self.network.successors(current_node):
                 assert child in joints_updated
-                parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
-                assert current_node in parent_ids
+
+                remaining_parents_n[child] -= 1
+                if remaining_parents_n[child] > 0:
+                    continue  # not all reachable parents are ready
 
                 # update joint
-                resampled_joint_samples = self.update_joints(
-                    joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
-                    current_node, parent_ids,
+                parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
+                assert current_node in parent_ids
+                resampled_joint_samples = self.update_joints_multi_variable(
+                    joint_gmm,
+                    [marginals_fixed[p] for p in reachable[child]],
+                    [marginals_updated[p] for p in reachable[child]],
+                    reachable[child], [current_node] + parent_ids,
                 )
+
                 new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
                 joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
+
                 if verbose > 0:
                     print(f"Updated joint for {child} with parents {parent_ids}")
 
@@ -489,10 +564,89 @@ class TrafficBayesNetwork:
                 resampled_child_samples = resampled_joint_samples[:, [0]]
                 new_child_gmm = self._optimal_gmm(resampled_child_samples,)
                 marginals_updated[child] = new_child_gmm
+
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
 
-                queue.put(child)
+                queue.append(child)
+
+        return marginals_updated, joints_updated
+
+    def update_network_with_multiple_soft_evidence_upward(
+            self, signal_dict: dict, marginals, joints, verbose=1,
+    ):
+        import copy
+        from collections import defaultdict, deque
+
+        marginals_updated = copy.deepcopy(marginals)
+        marginals_fixed = copy.deepcopy(marginals)
+        joints_updated = copy.deepcopy(joints)
+
+        signal_dict = {k: v for k, v in signal_dict.items() if v is not None}
+        if not signal_dict:
+            return marginals_updated, joints_updated
+
+        # traverse the graph and record the parents affected by information propagation for each node
+        reachable = defaultdict(list)  # records reachable parents by the information propagation
+        queue_0 = deque(set(signal_dict.keys()))
+        visited_0 = set()
+        while queue_0:
+            current_node_0 = queue_0.popleft()
+            if current_node_0 in visited_0:
+                continue
+            visited_0.add(current_node_0)
+            for child_0 in self.network.predecessors(current_node_0):
+                reachable[child_0].append(current_node_0)
+                queue_0.append(child_0)
+
+        remaining_parents_n = {
+            node: len([p for p in self.network.successors(node) if p in reachable[node]])
+            for node in self.network.nodes
+        }
+
+        # core algo below
+        queue = deque(set(signal_dict.keys()))
+        visited = set()
+        for n, gmm in signal_dict.items():
+            marginals_updated[n] = gmm
+
+        while queue:
+            current_node = queue.popleft()
+            if current_node in visited:
+                continue
+            visited.add(current_node)
+
+            for child in self.network.predecessors(current_node):
+                if child not in joints_updated:
+                    continue  # in upward update, the top node has no parents
+
+                remaining_parents_n[child] -= 1
+                if remaining_parents_n[child] > 0:
+                    continue  # not all reachable parents are ready
+
+                # update joint
+                parent_ids = joints_updated[current_node]['parents']
+                joint_gmm = joints_updated[current_node]['joints']
+                resampled_joint_samples = self.update_joints_multi_variable(
+                    joint_gmm, marginals_fixed[current_node], marginals_updated[current_node],
+                    current_node, [current_node] + joints_updated[current_node]['parents'],
+                )
+
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples, )
+                joints_updated[current_node] = {'parents': parent_ids, 'joints': new_joint_gmm}
+
+                if verbose > 0:
+                    print(f"Updated joint for {child} with parents {parent_ids}")
+
+                # update marginal
+                resampled_child_samples = resampled_joint_samples[:, [0]]
+                new_child_gmm = self._optimal_gmm(resampled_child_samples, )
+                marginals_updated[child] = new_child_gmm
+
+                if verbose > 0:
+                    print(f"Updated marginal for {child}")
+
+                queue.append(child)
 
         return marginals_updated, joints_updated
 
@@ -513,10 +667,10 @@ class TrafficBayesNetwork:
         entropies = {}
         for k, v in signal_dict.items():
             if (v['speed_no_flood'] is not None) and (v['speed_flood'] is not None):
-                marginals_no_flood, joints_no_flood = self.update_network_with_soft_evidence(
+                marginals_no_flood, joints_no_flood = self.update_network_with_soft_evidence_legacy(
                     k, v['speed_no_flood'], bayes_marginal, bayes_joints, verbose=0
                 )
-                marginals_flood, joints_flood = self.update_network_with_soft_evidence(
+                marginals_flood, joints_flood = self.update_network_with_soft_evidence_legacy(
                     k, v['speed_flood'], bayes_marginal, bayes_joints, verbose=0
                 )
                 entropies[k] = self.calculate_network_conditional_entropy([
@@ -542,8 +696,7 @@ class TrafficBayesNetwork:
             )
             for k, v in inferred_states.items()
         }
-        cleaned_signal = {k: v for k, v in signal.items() if v is not None}
-        return cleaned_signal
+        return signal
 
 
 class FloodBayesNetwork:
