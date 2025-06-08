@@ -6,11 +6,8 @@ from sklearn.mixture import GaussianMixture
 import visualization as vis
 import networkx as nx
 
-import warnings
-from sklearn.exceptions import ConvergenceWarning
-
 class TrafficBayesNetwork:
-    def __init__(self, n_samples, max_components):
+    def __init__(self, n_samples=None, max_components=None):
         self.network = None
         self.network_mode = None
         self.gmm_per_road = None
@@ -667,17 +664,30 @@ class TrafficBayesNetwork:
         )
         return marginals_out, joints_out
 
-    def calculate_network_conditional_entropy(self, network_list, verbose=1):
-        # Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
-        # Example: 0.01 * entropy {network updated with flood time dist_w_obs}
-        # + 0.99 * entropy {network with non-flood time dist_w_obs}
+    def calculate_network_conditional_entropy(self, network_list, verbose=1, label=None):
+        """
+        Conditional entropy: H(A∣B)=∑_b P(B=b)H(A∣B=b)
+        Example: 0.01 * entropy {network updated with flood time dist_w_obs}
+        + 0.99 * entropy {network with non-flood time dist_w_obs}
+
+        Example command of this method
+        entropies[k] = bayes_network_t.calculate_network_conditional_entropy([
+            {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
+            {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
+        ], label=k)
+        or simply use the original network stored in the class
+        entropy_original = bayes_network_t.calculate_network_entropy()
+        """
         entropy = 0
         for n in network_list:
             entropy += n['p'] * self.calculate_network_entropy(
                 marginals=n['marginals'], joints=n['joints'], verbose=0,
             )
         if verbose > 0:
-            print(f"Total Entropy of the Bayesian Network: {entropy}")
+            if label is not None:
+                print(f"Total Entropy of the Bayesian Network w. observation {label}: {entropy}")
+            else:
+                print(f"Total Entropy of the Bayesian Network: {entropy}")
         return entropy
 
     @staticmethod
@@ -688,7 +698,7 @@ class TrafficBayesNetwork:
         kl_div = np.mean(log_p - log_q)
         return kl_div
 
-    def calculate_network_kl_divergence(self, network_list, verbose=1):
+    def calculate_network_kl_divergence(self, network_list, verbose=1, label=None):
         assert len(network_list), 'Divergence is between two networks'
         network_0, network_1 = network_list[0], network_list[1]
 
@@ -702,7 +712,10 @@ class TrafficBayesNetwork:
 
         divergence = divergence_0 * network_0['p'] + divergence_1 * network_1['p']
         if verbose > 0:
-            print(f"KL divergencey of the two Bayesian Network: {divergence}")
+            if label is not None:
+                print(f"KL divergencey of the two Bayesian Network w. observation {label}: {divergence}")
+            else:
+                print(f"KL divergencey of the two Bayesian Network: {divergence}")
         return divergence
 
     def get_entropy_with_signals(self, bayes_joints, bayes_marginal, signal_dict, if_vis=False):
@@ -740,6 +753,30 @@ class TrafficBayesNetwork:
         }
         return signal
 
+    def save_instance(self, file):
+        import pickle
+        from pathlib import Path
+        file_path = Path(file)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        file = Path(file)
+        with file.open("wb") as f:
+            pickle.dump(self, f)
+
+    def load_instance(self, file):
+        try:
+            import pickle
+            from pathlib import Path
+            file = Path(file)
+            with file.open("rb") as f:
+                loaded = pickle.load(f)
+            self.__dict__.clear()
+            self.__dict__.update(loaded.__dict__)
+            print('Traffic Bayesian Network exists')
+            return True
+        except Exception as e:
+            print('Failed to load Traffic Bayesian Network, build from scratch')
+            return False
 
 class FloodBayesNetwork:
     def __init__(self, t_window: str = 'D'):
@@ -1057,23 +1094,28 @@ class FloodBayesNetwork:
 
         return time_groups, occurrence, co_occurrence
 
+    def save_instance(self, file):
+        import pickle
+        from pathlib import Path
+        file_path = Path(file)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
 
+        file = Path(file)
+        with file.open("wb") as f:
+            pickle.dump(self, f)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def load_instance(self, file):
+        try:
+            import pickle
+            from pathlib import Path
+            file = Path(file)
+            with file.open("rb") as f:
+                loaded = pickle.load(f)
+            self.__dict__.clear()
+            self.__dict__.update(loaded.__dict__)
+            print('Flood Bayesian Network exists')
+            return True
+        except Exception as e:
+            print('Failed to load Flood Bayesian Network, build from scratch')
+            return False
 

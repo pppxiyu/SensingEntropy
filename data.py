@@ -62,10 +62,10 @@ class RoadData:
             else:
                 print("Road geometry file does not exist. Pull it.")
         else:
-            if os.path.exists(f'./cache/nyc_traffic_{time_range[0]}_{time_range[1]}.csv'):
+            if os.path.exists(f'./cache/speed/nyc_traffic_{time_range[0]}_{time_range[1]}.csv'):
                 print("Traffic file exists")
                 data = pd.read_csv(
-                    f'./cache/nyc_traffic_{time_range[0]}_{time_range[1]}.csv',
+                    f'./cache/speed/nyc_traffic_{time_range[0]}_{time_range[1]}.csv',
                     dtype={"link_id": str}, parse_dates=["time"]
                 )
                 data = self._remove_segment_w_many_na(data)
@@ -136,7 +136,7 @@ class RoadData:
             all_data = all_data.rename(columns={'DATA_AS_OF': 'time', 'LINK_ID': 'link_id', 'SPEED': 'speed'})
             time_range[0] = time_range[0].replace(':', '-').replace('T', '-')
             time_range[1] = time_range[1].replace(':', '-').replace('T', '-')
-            all_data.to_csv(f'./cache/nyc_traffic_{time_range[0]}_{time_range[1]}.csv', index=False)
+            all_data.to_csv(f'./cache/speed/nyc_traffic_{time_range[0]}_{time_range[1]}.csv', index=False)
             self.speed = all_data
         return all_data
 
@@ -283,7 +283,7 @@ class RoadData:
             end = row['buffer_end']
 
             if os.path.exists(
-                    f"./cache/nyc_traffic_"
+                    f"./cache/speed/nyc_traffic_"
                     f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
                     f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv"
             ):
@@ -298,7 +298,7 @@ class RoadData:
 
             try:
                 data = pd.read_csv(
-                    f"./cache/nyc_traffic_"
+                    f"./cache/speed/nyc_traffic_"
                     f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
                     f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv",
                     dtype={"link_id": str}, parse_dates=["time"]
