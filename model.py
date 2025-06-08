@@ -6,6 +6,8 @@ from sklearn.mixture import GaussianMixture
 import visualization as vis
 import networkx as nx
 
+import warnings
+from sklearn.exceptions import ConvergenceWarning
 
 class TrafficBayesNetwork:
     def __init__(self, n_samples, max_components):
@@ -551,7 +553,7 @@ class TrafficBayesNetwork:
                     joint_gmm,
                     [marginals_fixed[p] for p in reachable[child]],
                     [marginals_updated[p] for p in reachable[child]],
-                    reachable[child], [current_node] + parent_ids,
+                    reachable[child], [child] + parent_ids,
                 )
 
                 new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
@@ -677,6 +679,31 @@ class TrafficBayesNetwork:
         if verbose > 0:
             print(f"Total Entropy of the Bayesian Network: {entropy}")
         return entropy
+
+    @staticmethod
+    def calculate_kl_divergence_gmm(P_gmm, Q_gmm, n_samples=10000):
+        X_samples, _ = P_gmm.sample(n_samples)
+        log_p = P_gmm.score_samples(X_samples)
+        log_q = Q_gmm.score_samples(X_samples)
+        kl_div = np.mean(log_p - log_q)
+        return kl_div
+
+    def calculate_network_kl_divergence(self, network_list, verbose=1):
+        assert len(network_list), 'Divergence is between two networks'
+        network_0, network_1 = network_list[0], network_list[1]
+
+        divergence_0 = 0
+        for prior, posterior in zip(list(self.gmm_per_road.values()), list(network_0['marginals'].values())):
+            divergence_0 += self.calculate_kl_divergence_gmm(posterior, prior)
+
+        divergence_1 = 0
+        for prior, posterior in zip(list(self.gmm_per_road.values()), list(network_1['marginals'].values())):
+            divergence_1 += self.calculate_kl_divergence_gmm(posterior, prior)
+
+        divergence = divergence_0 * network_0['p'] + divergence_1 * network_1['p']
+        if verbose > 0:
+            print(f"KL divergencey of the two Bayesian Network: {divergence}")
+        return divergence
 
     def get_entropy_with_signals(self, bayes_joints, bayes_marginal, signal_dict, if_vis=False):
         entropies = {}
