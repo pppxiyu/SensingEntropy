@@ -1,3 +1,4 @@
+import data
 import model
 from config import *
 import data as dd
@@ -9,6 +10,9 @@ import numpy as np
 random.seed(0)
 np.random.seed(0)
 
+import pickle
+import os
+
 """
 Load cache
 """
@@ -16,7 +20,9 @@ bayes_network_f = model.FloodBayesNetwork()
 load_f = bayes_network_f.load_instance('./cache/classes/bayes_network_f')
 bayes_network_t = model.TrafficBayesNetwork()
 load_t = bayes_network_t.load_instance('./cache/classes/bayes_network_t')
-if not (load_f and load_t):
+road_data = data.RoadData()
+load_r = road_data.load_instance('./cache/classes/road_data')
+if not (load_f and load_t and load_r):
 
     """
     Data
@@ -38,6 +44,8 @@ if not (load_f and load_t):
     # Pull traffic data in flooding periods
     road_data.pull_nyc_dot_traffic_flooding(dir_NYC_data_token)
     road_data.resample_nyc_dot_traffic(road_data.speed)
+
+    road_data.save_instance('./cache/classes/road_data')
 
     """
     Modeling
@@ -91,46 +99,72 @@ if not (load_f and load_t):
 """
 Inference and placement
 """
-# Update network with observation; Measure long-term observed network entropy
-entropies = {}
-for k, v in bayes_network_t.gmm_joint_flood_road.items():
-    if (v['speed_no_flood'] is not None) and (v['speed_flood'] is not None):
-        inferred_signals_no_flood = bayes_network_t.convert_state_to_dist(
-            bayes_network_f.infer_node_states(k, 0, 1, 1)
-        )
-        inferred_signals_flood = bayes_network_t.convert_state_to_dist(
-            bayes_network_f.infer_node_states(k, 1, 1, 1)
-        )
-        marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
-            {**{k: v['speed_no_flood']}, **inferred_signals_no_flood},
-            bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-        )
-        marginals_flood, joints_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
-            {**{k: v['speed_flood']}, **inferred_signals_flood},
-            bayes_network_t.gmm_per_road, bayes_network_t.gmm_joint_road_road, verbose=0
-        )
-        # entropies[k] = bayes_network_t.calculate_network_kl_divergence([
-        #     {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
-        #     {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
-        # ], label=k)
-        entropies[k] = bayes_network_t.calculate_network_conditional_entropy([
-            {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
-            {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
-        ], label=k)
-        # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
-        #     z_max = vis.dist_gmm_3d(joints_flood[k][1], k, joints_flood[k][0][0], return_z_max=True)
-        #     vis.dist_gmm_3d(
-        #         bayes_network_t.gmm_joint_road_road[k][1], k, bayes_network_t.gmm_joint_road_road[k][0][0],
-        #         z_limit=z_max
-        #     )  # FIGURE 4: joint distributions changes
+# Update network with observation
+marginals = bayes_network_t.gmm_per_road.copy()
+joints = bayes_network_t.gmm_joint_road_road.copy()
+for n in range(sensor_count):
+
+    # get records
+    try:
+        with open(f"./cache/results/sensing_{n}.pkl", "rb") as f:
+            results = pickle.load(f)
+            print(f"Loaded sensing_{n} from disk.")
+    except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
+        print(f"Loading failed ({e}), continuing with calculation.")
+
+        results = {}
+        for k, v in bayes_network_t.gmm_joint_flood_road.items():
+            if not ((v['speed_no_flood'] is not None) and (v['speed_flood'] is not None)):
+                continue
+            inferred_signals_no_flood = bayes_network_t.convert_state_to_dist(
+                bayes_network_f.infer_node_states(k, 0, 1, 1)
+            )
+            inferred_signals_flood = bayes_network_t.convert_state_to_dist(
+                bayes_network_f.infer_node_states(k, 1, 1, 1)
+            )
+            marginals_no_flood, joints_no_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
+                {**{k: v['speed_no_flood']}, **inferred_signals_no_flood},
+                marginals, joints, verbose=0
+            )
+            marginals_flood, joints_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
+                {**{k: v['speed_flood']}, **inferred_signals_flood},
+                marginals, joints, verbose=0
+            )
+            bn_updated = [
+                {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood, 'joints': joints_no_flood},
+                {'p': v['p_flood'], 'marginals': marginals_flood, 'joints': joints_flood},
+            ]
+            results[k] = {
+                'bn_updated': bn_updated,
+                'entropy': bayes_network_t.calculate_network_conditional_entropy(bn_updated, label=k),
+                'info_gain': bayes_network_t.calculate_network_kl_divergence(bn_updated, label=k),
+            }
+            # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
+            #     z_max = vis.dist_gmm_3d(joints_flood[k][1], k, joints_flood[k][0][0], return_z_max=True)
+            #     vis.dist_gmm_3d(
+            #         bayes_network_t.gmm_joint_road_road[k][1], k, bayes_network_t.gmm_joint_road_road[k][0][0],
+            #         z_limit=z_max
+            #     )  # FIGURE 4: joint distributions changes
+
+        os.makedirs('./cache/results', exist_ok=True)
+        with open(f"./cache/results/sensing_{n}.pkl", "wb") as f:
+            pickle.dump(results, f)
+
+    # interpret records
+    place = max(results, key=lambda x: results[x]['info_gain'])
+    print(f"Flood sensing at {place}")
+    marginals, joints = bayes_network_t.compress_multi_gmm({k: v['bn_updated'] for k, v in results.items()})
+
+    # vis.map_roads_w_values(
+    #     road_data.geo.copy(), results, city_shp_path=dir_city_boundary
+    # )  # FIGURE 6: entropy map
 
 """
-A function is needed here to combine the two posteriors by the selected sensor into one prior for iteration.
+Validation
 """
+print()
+results[place]['bn_updated'][1]
 
-# vis.map_roads_w_values(
-#     road_data.geo.copy(), entropies, city_shp_path=dir_city_boundary
-# )  # FIGURE 6: entropy map
 
 pass
 

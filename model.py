@@ -662,6 +662,9 @@ class TrafficBayesNetwork:
         marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_upward(
             signal_dict, marginals_out, joints_out, verbose=verbose,
         )
+        """
+        A function is needed to handle the multi GMM not influenced by the propagation.
+        """
         return marginals_out, joints_out
 
     def calculate_network_conditional_entropy(self, network_list, verbose=1, label=None):
@@ -717,6 +720,10 @@ class TrafficBayesNetwork:
             else:
                 print(f"KL divergencey of the two Bayesian Network: {divergence}")
         return divergence
+
+    def compress_multi_gmm(self, bn_list: dict):
+        marginals, joints = None, None
+        return marginals, joints
 
     def get_entropy_with_signals(self, bayes_joints, bayes_marginal, signal_dict, if_vis=False):
         entropies = {}
@@ -1118,4 +1125,63 @@ class FloodBayesNetwork:
         except Exception as e:
             print('Failed to load Flood Bayesian Network, build from scratch')
             return False
+
+
+class MultiGaussianMixture:
+    """
+    Pending for check
+    """
+    def __init__(self, gmm_list: list, p_list: list,):
+        self.gmm_list = gmm_list
+        self.p_list = p_list
+
+    def sample(self, n_samples=1):
+        gmm_choices = np.random.choice(
+            len(self.gmm_list), size=n_samples, p=self.p_list
+        )
+
+        # count how many samples per GMM
+        unique, counts = np.unique(gmm_choices, return_counts=True)
+        samples = []
+        # component_choices = []
+
+        # for each GMM, sample in batch
+        for gmm_idx, count in zip(unique, counts):
+            gmm = self.gmm_list[gmm_idx]
+            s_batch, c_batch = gmm.sample(count)
+
+            samples.append(s_batch)
+            # component_choices.extend([(gmm_idx, c) for c in c_batch])
+
+        # Concatenate results
+        samples = np.vstack(samples)
+        # component_choices = np.array(component_choices)
+
+        # reorder samples to match original gmm_choices order
+        reorder_index = np.argsort(np.argsort(np.concatenate([
+            np.repeat(gmm_idx, count) for gmm_idx, count in zip(unique, counts)
+        ])))
+        samples = samples[reorder_index]
+        # component_choices = component_choices[reorder_index]
+
+        return samples
+
+    def score_samples(self, X):
+        # for each GMM, compute its weighted density
+        total_density = np.zeros(X.shape[0])
+
+        for p_i, gmm_i in zip(self.p_list, self.gmm_list):
+            # GaussianMixture.score_samples returns log density
+            log_density_i = gmm_i.score_samples(X)
+            density_i = np.exp(log_density_i)
+
+            total_density += p_i * density_i
+
+        # Avoid log(0)
+        total_density = np.maximum(total_density, 1e-300)
+
+        log_total_density = np.log(total_density)
+        return log_total_density
+
+
 

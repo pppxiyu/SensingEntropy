@@ -9,5 +9,5 @@ dir_city_boundary = './data/nybb_25a/nybb.shp'
 with open(dir_mapbox_token, "r") as file:
     mapbox_token = file.read()
 
-sensor_count = 2
+sensor_count = 1
 

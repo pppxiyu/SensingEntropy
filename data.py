@@ -311,6 +311,31 @@ class RoadData:
         self.speed = df_concat
         return
 
+    def save_instance(self, file):
+        import pickle
+        from pathlib import Path
+        file_path = Path(file)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        file = Path(file)
+        with file.open("wb") as f:
+            pickle.dump(self, f)
+
+    def load_instance(self, file):
+        try:
+            import pickle
+            from pathlib import Path
+            file = Path(file)
+            with file.open("rb") as f:
+                loaded = pickle.load(f)
+            self.__dict__.clear()
+            self.__dict__.update(loaded.__dict__)
+            print('Flood Bayesian Network exists')
+            return True
+        except Exception as e:
+            print('Failed to load Flood Bayesian Network, build from scratch')
+            return False
+
 
 def _polyline_parse(string):
     from shapely.geometry import LineString
@@ -330,6 +355,8 @@ def _polyline_parse(string):
         return LineString(cleaned_points)
     except Exception as e:
         return None
+
+
 
 
 def import_nyc_dot_traffic_legacy(dir_file):
