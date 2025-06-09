@@ -174,11 +174,12 @@ class RoadData:
         self.closures = closure_refine
         return closure_refine
 
-    def resample_nyc_dot_traffic(self, data, time_interval='5min'):
+    def resample_nyc_dot_traffic(self, data, time_interval='5min', save_2_class=True):
         data['time'] = data['time'].dt.round(time_interval)
         data.set_index("time", inplace=True)
         data_resampled = data.groupby(['link_id', 'time'])["speed"].mean().reset_index()
-        self.speed_resampled = data_resampled
+        if save_2_class:
+            self.speed_resampled = data_resampled
         return data_resampled
 
     @staticmethod
@@ -330,12 +331,61 @@ class RoadData:
                 loaded = pickle.load(f)
             self.__dict__.clear()
             self.__dict__.update(loaded.__dict__)
-            print('Flood Bayesian Network exists')
+            print('Road Data Class exists')
             return True
         except Exception as e:
-            print('Failed to load Flood Bayesian Network, build from scratch')
+            print('Failed to load Road Data, build from scratch')
             return False
 
+    def get_assigned_time_interval(self, road_name):
+        flood_time_citywide = self.flood_time_citywide.copy()
+        flood_time_citywide['buffer_start'] = pd.to_datetime(flood_time_citywide['buffer_start'])
+        flood_time_citywide['buffer_end'] = pd.to_datetime(flood_time_citywide['buffer_end'])
+        df = self.flood_time_per_road[road_name].copy()
+        df['buffer_start'] = pd.to_datetime(df['buffer_start'])
+        df['buffer_end'] = pd.to_datetime(df['buffer_end'])
+
+        df['buffer_start_citywide'] = pd.NaT
+        df['buffer_end_citywide'] = pd.NaT
+
+        for idx, row in df.iterrows():
+            match = flood_time_citywide[
+                (flood_time_citywide['buffer_start'] <= row['buffer_start']) &
+                (flood_time_citywide['buffer_end'] >= row['buffer_end'])
+                ]
+            assert len(match) == 1, "Multiple matches found or no match found"
+
+            df.at[idx, 'buffer_start_citywide'] = match.iloc[0]['buffer_start']
+            df.at[idx, 'buffer_end_citywide'] = match.iloc[0]['buffer_end']
+
+        return df
+
+    def get_data_when_sensing_on(self, road_name):
+        df = self.get_assigned_time_interval(road_name)
+        import os
+        data_list = []
+        for _, row in df.iterrows():
+            start = row['buffer_start_citywide']
+            end = row['buffer_end_citywide']
+
+            assert os.path.exists(
+                    f"./cache/speed/nyc_traffic_"
+                    f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
+                    f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv"
+            ), 'Data not exist'
+
+            data = pd.read_csv(
+                f"./cache/speed/nyc_traffic_"
+                f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
+                f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv",
+                dtype={"link_id": str}, parse_dates=["time"]
+            )
+            data_list.append(data)
+
+        df_concat = pd.concat(data_list, ignore_index=True)
+        df_concat = self._remove_segment_w_many_na(df_concat)
+        df_concat = self.resample_nyc_dot_traffic(df_concat, save_2_class=False)
+        return df_concat
 
 def _polyline_parse(string):
     from shapely.geometry import LineString

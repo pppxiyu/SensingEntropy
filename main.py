@@ -137,7 +137,7 @@ for n in range(sensor_count):
             results[k] = {
                 'bn_updated': bn_updated,
                 'entropy': bayes_network_t.calculate_network_conditional_entropy(bn_updated, label=k),
-                'info_gain': bayes_network_t.calculate_network_kl_divergence(bn_updated, label=k),
+                'info_gain': bayes_network_t.calculate_network_conditional_kl_divergence(bn_updated, label=k),
             }
             # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
             #     z_max = vis.dist_gmm_3d(joints_flood[k][1], k, joints_flood[k][0][0], return_z_max=True)
@@ -162,9 +162,19 @@ for n in range(sensor_count):
 """
 Validation
 """
-print()
-results[place]['bn_updated'][1]
+for k in results.keys():
+    speed_data = road_data.get_data_when_sensing_on(k)
+    speed_calculator = mo.TrafficBayesNetwork(10000, 3)
+    speed_calculator.fit_marginal(speed_data)
 
+    _ = speed_calculator.calculate_network_kl_divergence([
+        results[k]['bn_updated'][1]['marginals'],  # estimate
+        speed_calculator.gmm_per_road,  # ground truth
+    ])
+    _ = speed_calculator.calculate_network_kl_divergence([
+        bayes_network_t.gmm_per_road,  # historical
+        speed_calculator.gmm_per_road,  # ground truth
+    ])
 
 pass
 
