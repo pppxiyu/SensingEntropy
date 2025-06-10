@@ -61,8 +61,8 @@ if not (load_f and load_t and load_r):
     bayes_network_f.build_bayes_network()
 
     # Fit marginals - speed
-    bayes_network_t = mo.TrafficBayesNetwork(10000, 3)
-    bayes_network_t.fit_marginal(road_data.speed, )
+    bayes_network_t = mo.TrafficBayesNetwork(10000, 2)
+    bayes_network_t.fit_marginal(road_data.speed)
     # for seg in road_data.speed['link_id'].unique()[0: 10]:
     #     vis.dist_histo_gmm_1d(
     #         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
@@ -136,7 +136,7 @@ for n in range(sensor_count):
             ]
             results[k] = {
                 'bn_updated': bn_updated,
-                'entropy': bayes_network_t.calculate_network_conditional_entropy(bn_updated, label=k),
+                # 'entropy': bayes_network_t.calculate_network_conditional_entropy(bn_updated, label=k),
                 'info_gain': bayes_network_t.calculate_network_conditional_kl_divergence(bn_updated, label=k),
             }
             # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
@@ -150,10 +150,10 @@ for n in range(sensor_count):
         with open(f"./cache/results/sensing_{n}.pkl", "wb") as f:
             pickle.dump(results, f)
 
-    # interpret records
-    place = max(results, key=lambda x: results[x]['info_gain'])
-    print(f"Flood sensing at {place}")
-    marginals, joints = bayes_network_t.compress_multi_gmm({k: v['bn_updated'] for k, v in results.items()})
+    # # interpret records
+    # place = max(results, key=lambda x: results[x]['info_gain'])
+    # print(f"Flood sensing at {place}")
+    # marginals, joints = bayes_network_t.compress_multi_gmm({k: v['bn_updated'] for k, v in results.items()})
 
     # vis.map_roads_w_values(
     #     road_data.geo.copy(), results, city_shp_path=dir_city_boundary

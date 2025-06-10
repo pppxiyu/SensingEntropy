@@ -374,13 +374,16 @@ class RoadData:
                     f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv"
             ), 'Data not exist'
 
-            data = pd.read_csv(
-                f"./cache/speed/nyc_traffic_"
-                f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
-                f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv",
-                dtype={"link_id": str}, parse_dates=["time"]
-            )
-            data_list.append(data)
+            try:
+                data = pd.read_csv(
+                    f"./cache/speed/nyc_traffic_"
+                    f"{start.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}_"
+                    f"{end.strftime('%Y-%m-%dT%H:%M:%S').replace(':', '-').replace('T', '-')}.csv",
+                    dtype={"link_id": str}, parse_dates=["time"]
+                )
+                data_list.append(data)
+            except pd.errors.EmptyDataError:
+                pass
 
         df_concat = pd.concat(data_list, ignore_index=True)
         df_concat = self._remove_segment_w_many_na(df_concat)

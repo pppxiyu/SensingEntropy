@@ -17,10 +17,12 @@ class TrafficBayesNetwork:
         self.max_components = max_components
         return
 
-    def _optimal_gmm(self, x,):
+    def _optimal_gmm(self, x, max_components=None):
         lowest_bic = np.inf
         best_gmm = None
-        for n in range(1, self.max_components + 1):
+        if max_components is None:
+            max_components = self.max_components
+        for n in range(1, max_components + 1):
             gmm = GaussianMixture(
                 n_components=n,
                 # covariance_type='diag',
@@ -269,7 +271,9 @@ class TrafficBayesNetwork:
                 n_init=3,
             )
             gmm.fit(np.hstack((x, y)))
-            dependency_gmms[child] = {'parents': parents_filtered, 'joints': gmm, 'parent_type': self.network_mode}
+            dependency_gmms[child] = {
+                'parents': parents_filtered, 'joints': gmm, 'parent_type': self.network_mode
+            }
         self.gmm_joint_road_road = dependency_gmms
         return
 
@@ -401,11 +405,11 @@ class TrafficBayesNetwork:
         # get the ratio term, p'(B_1)/p(B_1) or p'(B_1 B_2)/p(B_1 B_2,) etc.
         # in the Bayesian Network, B_1 and B_2 are assumed to be independent
         observed_xk_score = 1
-        for observed_xk, i in zip(observed_xk_list, range(len(xk_idx_list))):
+        for observed_xk, i in zip(observed_xk_list, range(xk_samples.shape[1])):
             observed_xk_score *= observed_xk.score_samples(xk_samples[:, [i]])
 
         orig_xk_score = 1
-        for orig_xk, i in zip(orig_xk_list, range(len(xk_idx_list))):
+        for orig_xk, i in zip(orig_xk_list, range(xk_samples.shape[1])):
             orig_xk_score *= orig_xk.score_samples(xk_samples[:, [i]])
 
         log_weights = observed_xk_score - orig_xk_score
@@ -415,6 +419,85 @@ class TrafficBayesNetwork:
         # apply the ratio term
         indices = np.random.choice(self.n_samples, size=self.n_samples, p=weights, replace=True)
         return joint_samples[indices]
+
+    @staticmethod
+    def gmm_pdf(gmm, y_grid):
+        # part of the quick algo
+        from scipy.stats import norm
+        pdf = np.zeros_like(y_grid)
+        for weight, mean, var in zip(gmm.weights_, gmm.means_.flatten(), gmm.covariances_.flatten()):
+            pdf += weight * norm.pdf(y_grid, loc=mean, scale=np.sqrt(var))
+        return pdf
+
+    @staticmethod
+    def marginalize_gmm(gmm, var_idx):
+        # part of the quick algo
+        n_components = gmm.n_components
+
+        # Build new 1D GMM manually
+        marginal_gmm = GaussianMixture(n_components=n_components, covariance_type='full')
+
+        # Set parameters
+        marginal_gmm.weights_ = np.copy(gmm.weights_)
+
+        # Extract 1D means and variances
+        marginal_means = gmm.means_[:, var_idx].reshape(-1, 1)
+        marginal_covariances = np.zeros((n_components, 1, 1))
+
+        for k in range(n_components):
+            var = gmm.covariances_[k][var_idx, var_idx]
+            marginal_covariances[k, 0, 0] = var
+
+        marginal_gmm.means_ = marginal_means
+        marginal_gmm.covariances_ = marginal_covariances
+        marginal_gmm.precisions_cholesky_ = 1.0 / np.sqrt(marginal_covariances)
+
+        return marginal_gmm
+
+    def update_joints_multi_variable_backup(
+            self, orig_joint, orig_xk_list: list, observed_xk_list: list, xk_name_list: list, all_ids: list,
+    ):
+        # quick algo, not fully integrated
+        orig_xk = orig_xk_list[0]
+        observed_xk = observed_xk_list[0]
+        obs_var_idx = 1
+        # Prepare new weights
+        new_weights = []
+
+        for k in range(orig_joint.n_components):
+            # Extract mean and variance of Y-dim in this component
+            mean_Y = orig_joint.means_[k, obs_var_idx]
+            var_Y = orig_joint.covariances_[k][obs_var_idx, obs_var_idx]
+            std_Y = np.sqrt(var_Y)
+
+            # Evaluate correction factor at mean_Y
+            pY = self.gmm_pdf(orig_xk, np.array([mean_Y]))[0]
+            tilde_pY = self.gmm_pdf(observed_xk, np.array([mean_Y]))[0]
+
+            correction_factor = tilde_pY / (pY + 1e-12)  # avoid division by zero
+
+            # New weight = old weight * correction
+            new_weight = orig_joint.weights_[k] * correction_factor
+            new_weights.append(new_weight)
+
+        # Normalize weights
+        new_weights = np.array(new_weights)
+        new_weights /= np.sum(new_weights)
+
+        # Build new GMM with same means and covariances but updated weights
+        new_joint = GaussianMixture(
+            n_components=orig_joint.n_components,
+            covariance_type='full'
+        )
+
+        # Manually set parameters
+        new_joint.weights_ = new_weights
+        new_joint.means_ = np.copy(orig_joint.means_)
+        new_joint.covariances_ = np.copy(orig_joint.covariances_)
+
+        # The sklearn GMM also needs precisions_cholesky_
+        new_joint.precisions_cholesky_ = orig_joint.precisions_cholesky_
+        return new_joint
 
     def update_joint_at_child_legacy(
             self, orig_joint, orig_child_gmm, observed_child_gmm,
@@ -546,14 +629,15 @@ class TrafficBayesNetwork:
                 # update joint
                 parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
                 assert current_node in parent_ids
+
                 resampled_joint_samples = self.update_joints_multi_variable(
                     joint_gmm,
                     [marginals_fixed[p] for p in reachable[child]],
                     [marginals_updated[p] for p in reachable[child]],
                     reachable[child], [child] + parent_ids,
                 )
-
                 new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
+
                 joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
 
                 if verbose > 0:
@@ -563,6 +647,20 @@ class TrafficBayesNetwork:
                 resampled_child_samples = resampled_joint_samples[:, [0]]
                 new_child_gmm = self._optimal_gmm(resampled_child_samples,)
                 marginals_updated[child] = new_child_gmm
+
+                # fast algo
+                # new_joint_gmm = self.update_joints_multi_variable_backup(
+                #     joint_gmm,
+                #     [marginals_fixed[p] for p in reachable[child]],
+                #     [marginals_updated[p] for p in reachable[child]],
+                #     reachable[child], [child] + parent_ids,
+                # )
+                # joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
+                # if verbose > 0:
+                #     print(f"Updated joint for {child} with parents {parent_ids}")
+                # new_marginal = self.marginalize_gmm(new_joint_gmm, 0)
+                # marginals_updated[child] = new_marginal
+
 
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
@@ -626,6 +724,7 @@ class TrafficBayesNetwork:
                 # update joint
                 parent_ids = joints_updated[current_node]['parents']
                 joint_gmm = joints_updated[current_node]['joints']
+
                 resampled_joint_samples = self.update_joints_multi_variable(
                     joint_gmm,
                     [marginals_fixed[current_node]], [marginals_updated[current_node]],
