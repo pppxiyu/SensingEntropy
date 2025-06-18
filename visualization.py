@@ -233,7 +233,7 @@ def map_roads_w_values(
     return
 
 
-def dist_gmm_1d(gmm, speed_range=None,):
+def dist_gmm_1d(gmm, speed_range=None, title=None):
     import numpy as np
     from scipy.stats import norm
     if speed_range is None:
@@ -250,6 +250,7 @@ def dist_gmm_1d(gmm, speed_range=None,):
         component_pdf = weight * norm.pdf(speed_range, mean, np.sqrt(cov))
         plt.plot(speed_range, component_pdf, linestyle='dashed', label=f"Component μ={mean:.2f}", alpha=0.7)
 
+    plt.title(title)
     plt.xlabel("Traffic Speed")
     plt.ylabel("Density")
     plt.legend()

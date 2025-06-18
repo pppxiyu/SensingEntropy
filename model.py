@@ -1,51 +1,63 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 from sklearn.mixture import GaussianMixture
 import visualization as vis
 import networkx as nx
 
+
 class TrafficBayesNetwork:
-    def __init__(self, n_samples=None, max_components=None):
+    def __init__(
+            self,
+            speed: pd.DataFrame = None, road_geo: gpd.GeoDataFrame = None,
+            n_samples: int = None, n_components: int = None,
+            network_mode: str = 'causal', fitting_mode: str = 'one-off',
+            remove_nodes: list = None,
+    ):
+        """
+        network_mode: it specifies the direction of edges in the network. "causal" means the arrow points
+            from downstream nodes to upstream nodes, following the direction of traffic congestion propagation.
+            "physical" means following the direction of traffic flows.
+        speed: this arg is also used to remove edges with no data when building the network.
+        align_data: this func is used to trim the data to ensure that data is consistent throughout
+            fitting joints, marginals, and signals
+        """
+        assert fitting_mode in ['one-off', 'iterate']
+        assert network_mode in ['causal', 'physical']
+
         self.network = None
-        self.network_mode = None
-        self.gmm_per_road = None
-        self.gmm_joint_road_road = None
-        self.gmm_joint_flood_road = None
+        self.speed_data = None
+        self.marginals = None
+        self.joints = None
+        self.signal = None
+
+        self.network_mode = network_mode
         self.n_samples = n_samples
-        self.max_components = max_components
-        return
+        self.n_components = n_components
+        self.fitting_mode = fitting_mode
 
-    def _optimal_gmm(self, x, max_components=None):
-        lowest_bic = np.inf
-        best_gmm = None
-        if max_components is None:
-            max_components = self.max_components
-        for n in range(1, max_components + 1):
-            gmm = GaussianMixture(
-                n_components=n,
-                # covariance_type='diag',
-                # init_params='k-means++',
-                reg_covar=.2,
-                n_init=3,
-                random_state=66
-            )
-            gmm.fit(x)
-            aic = gmm.aic(x)
-            if aic < lowest_bic:
-                lowest_bic = aic
-                best_gmm = gmm
-        return best_gmm
+        if speed is not None and road_geo is not None:
+            self.network = self.build_network_from_geo(road_geo, remove_no_data_segment=speed)
 
-    def fit_marginal(self, df, ):
-        segment_gmms = {}
-        for segment, data in df.copy().groupby("link_id"):
-            speeds = data["speed"].values.reshape(-1, 1)
-            best_gmm = self._optimal_gmm(speeds,)
-            segment_gmms[segment] = best_gmm
-        self.gmm_per_road = segment_gmms
-        return
+            """
+                In the Bayesian Network, the marginal of the same node should be similar (if not identical)
+                among different joints. So, the raw data should be filtered by timestamp. Only timestamps
+                that are available at all nodes are kept. In light of this, removing some nodes with
+                very limited data is beneficial for maintaining the size of data. Use the function below 
+                in the bebug mode to identify these harmful nodes using the greedy algorithm. 
+                Then, input the results in the config.py file.
+                
+                self.remove_nodes_for_consistency(
+                    speed.copy(), self.network.copy(), 5
+                )
+            """
+            if remove_nodes is not None:
+                speed = speed[~speed['link_id'].isin(remove_nodes)]
+                self.remove_nodes_from_network(remove_nodes)
+
+            self.speed_data = self.align_data_time(speed, self.network, check_kept_data=False)
 
     @staticmethod
     def _find_downstream_segment(segment, gdf):
@@ -70,9 +82,10 @@ class TrafficBayesNetwork:
         self.network = BayesianNetwork(edges)
         return
 
-    def remove_no_data_segment_from_network(self, graph):
+    @staticmethod
+    def remove_no_data_segment_from_network(graph, data):
         node_list_graph = list(graph.nodes())
-        node_list_gmm = list(self.gmm_per_road.keys())
+        node_list_gmm = list(data['link_id'].unique())
         graph_node_not_in_gmm = []
         for n in node_list_graph:
             if n not in node_list_gmm:
@@ -96,7 +109,11 @@ class TrafficBayesNetwork:
             assert graph_covered_by_speed_data, 'Some nodes in the network do not have speed data.'
             return graph
 
-    def build_network_from_geo(self, gdf, mode='causal', remove_no_data_segment=True):
+    def build_network_from_geo(self, gdf, remove_no_data_segment, remove_isolated_nodes=True):
+        """
+            remove_no_data_segment should be a dataframe contains the data of segments
+        """
+
         graph = nx.DiGraph()
 
         segment_groups = {}
@@ -132,25 +149,30 @@ class TrafficBayesNetwork:
                                 graph.add_edge(source_link_id, target_link_id)
                                 break
 
-        if not nx.is_directed_acyclic_graph(graph):
-            import warnings
-            warnings.warn('The network is not acyclic.')
-        if remove_no_data_segment:
-            graph = self.remove_no_data_segment_from_network(graph)
+        # if not nx.is_directed_acyclic_graph(graph):
+        #     import warnings
+        #     warnings.warn('The network is not acyclic.')
+        assert nx.is_directed_acyclic_graph(graph), 'The network is not acyclic.'
 
-        if mode == 'causal':
+        graph = self.remove_no_data_segment_from_network(graph, remove_no_data_segment)
+
+        if self.network_mode == 'causal':
             graph = graph.reverse(copy=True)
-            self.network_mode = 'causal'
         else:
-            assert mode == 'physical'
-            self.network_mode = 'physical'
             import warnings
             warnings.warn('The edge directions follows traffic flow. It should be reverse for Bayesian network. ')
 
-        self.network = graph
+        if remove_isolated_nodes:
+            graph.remove_nodes_from(list(nx.isolates(graph)))
+
+        return graph
+
+    def remove_nodes_from_network(self, remove_nodes):
+        self.network.remove_nodes_from(remove_nodes)
+        self.network.remove_nodes_from(list(nx.isolates(self.network)))
         return
 
-    def build_network_by_causality(
+    def build_network_by_causality_legacy(
             self, road_speed, road_geo, local_crs,
             significance=0.01, max_lag=2, max_upstream_roads=2
     ):
@@ -236,11 +258,126 @@ class TrafficBayesNetwork:
             graph.remove_edge(*edge_to_remove)
         return list(graph.edges())
 
-    def fit_joint(self, df, ):
+    def align_data_time(self, df, graph, check_kept_data=False,):
+        timestamps_per_node = (
+            df.groupby('link_id')['time']
+            .apply(set)
+            .to_dict()
+        )
+
+        dfs_consistent = []
+        components = (
+            nx.connected_components(graph) if not graph.is_directed()
+            else nx.weakly_connected_components(graph)
+        )
+        for component in components:
+            common_timestamps = set.intersection(
+                *[timestamps_per_node.get(node, set()) for node in component]
+            )
+            df_component = df[df['link_id'].isin(component)]
+            df_component = df_component[df_component['time'].isin(common_timestamps)]
+            dfs_consistent.append(df_component)
+        df_final = pd.concat(dfs_consistent, ignore_index=True)
+
+        if check_kept_data:
+            original_counts = df.groupby('link_id').size().rename('original_count')
+            kept_counts = df_final.groupby('link_id').size().rename('kept_count')
+            stats = original_counts.to_frame().join(kept_counts, how='left').fillna(0).astype(int)
+            stats['lost_count'] = stats['original_count'] - stats['kept_count']
+            stats['loss_ratio'] = stats['lost_count'] / stats['original_count']
+            ave_loss_ratio = stats['loss_ratio'].mean()
+            return df_final, ave_loss_ratio
+
+        return df_final
+
+    def evaluate_node_removal_impact(self, df, graph):
+        baseline_df_final, ave_loss_r = self.align_data_time(df, graph, check_kept_data=True)
+
+        results = []
+        for node in graph.nodes():
+            graph_copy = graph.copy()
+            graph_copy.remove_node(node)
+
+            df_filtered = df[df['link_id'] != node]
+            df_final_after_removal, ave_loss_r_remove = self.align_data_time(
+                df_filtered, graph_copy, check_kept_data=True
+            )
+
+            improvement = ave_loss_r - ave_loss_r_remove
+
+            results.append({
+                'link_id': node,
+                'retained_with_removal': ave_loss_r_remove,
+                'baseline_retained': ave_loss_r,
+                'improvement': improvement
+            })
+
+        result_df = pd.DataFrame(results)
+        result_df = result_df.sort_values(by='improvement', ascending=False)
+        return result_df
+
+    def remove_nodes_for_consistency(self, df, G, num_node_2_remove):
+        graph = G.copy()
+        remove_list = []
+        for _ in range(num_node_2_remove):
+            result_df = self.evaluate_node_removal_impact(df, graph)
+            remove_node = result_df.iloc[0]['link_id']
+            remove_list.append(remove_node)
+
+            graph.remove_node(remove_node)
+            df = df[df['link_id'] != remove_node]
+        print(f'Remove nodes {remove_list}')
+
+    def _optimal_gmm(self, x, n_components=None):
+        if self.fitting_mode == 'iterate':
+            lowest_bic = np.inf
+            best_gmm = None
+            if n_components is None:
+                n_components = self.n_components
+
+            for n in range(1, n_components + 1):
+                gmm = GaussianMixture(
+                    n_components=n,
+                    # covariance_type='diag',
+                    # init_params='k-means++',
+                    reg_covar=.2,
+                    n_init=3,
+                    random_state=66
+                )
+                gmm.fit(x)
+                aic = gmm.aic(x)
+                if aic < lowest_bic:
+                    lowest_bic = aic
+                    best_gmm = gmm
+            return best_gmm
+
+        elif self.fitting_mode == 'one-off':
+            if n_components is None:
+                n_components = self.n_components
+            gmm = GaussianMixture(
+                n_components=n_components,
+                # covariance_type='diag',
+                # init_params='k-means++',
+                reg_covar=.2,
+                n_init=3,
+                random_state=66
+            )
+            gmm.fit(x)
+            return gmm
+
+    def fit_marginal(self):
+        segment_gmms = {}
+        for segment, data in self.speed_data.copy().groupby("link_id"):
+            speeds = data["speed"].values.reshape(-1, 1)
+            best_gmm = self._optimal_gmm(speeds,)
+            segment_gmms[segment] = best_gmm
+        self.marginals = segment_gmms
+        return
+
+    def fit_joint(self):
+        df = self.speed_data.copy()
         dependency_gmms = {}
-        i = 0
         for child in self.network.nodes():
-            i += 1
             parents = list(self.network.predecessors(child))
             if not parents:
                 continue
@@ -255,17 +392,16 @@ class TrafficBayesNetwork:
             ).dropna()
             child_data = df[df['link_id'] == child].set_index('time')["speed"].dropna()
 
-            parent_data = parent_data.reindex(child_data.index).dropna()
-            child_data = child_data.reindex(parent_data.index).dropna()
-
-            if len(parent_data) == 0 or len(child_data) == 0:
-                continue
+            # parent_data = parent_data.reindex(child_data.index).dropna()
+            # child_data = child_data.reindex(parent_data.index).dropna()
+            # if len(parent_data) == 0 or len(child_data) == 0:
+            #     continue
 
             x = child_data.values.reshape(-1, 1)
             y = parent_data.values  # keep the child at the first dim
 
             gmm = GaussianMixture(
-                n_components=self.max_components,
+                n_components=self.n_components,
                 random_state=66,
                 reg_covar=.2,
                 n_init=3,
@@ -274,12 +410,13 @@ class TrafficBayesNetwork:
             dependency_gmms[child] = {
                 'parents': parents_filtered, 'joints': gmm, 'parent_type': self.network_mode
             }
-        self.gmm_joint_road_road = dependency_gmms
+        self.joints = dependency_gmms
         return
 
-    def fit_joint_flood_n_speed(self, flood_time, speed, flood_prob, verbose=0):
+    def fit_signal(self, flood_time, flood_prob, verbose=0):
         import warnings
 
+        speed = self.speed_data.copy()
         dists = {}
         for _, row in flood_prob.iterrows():
             link_id = row['link_id']
@@ -319,50 +456,8 @@ class TrafficBayesNetwork:
                 'speed_no_flood': gmm_no_flood,
                 'speed_flood': gmm_flood
             }
-        self.gmm_joint_flood_road = dists
+        self.signal = dists
         return
-
-    def calculate_gmm_entropy_approximation(self, gmm):
-        samples, _ = gmm.sample(self.n_samples)
-        log_probs = gmm.score_samples(samples)
-        entropy = -np.mean(log_probs)
-        return entropy
-
-    def calculate_network_entropy(self, marginals=None, joints=None, verbose=1):
-        # if the node has no parent, the marginal was used
-        # if the node has parents, joint and the marginal refitted from joint sampling was used
-
-        if marginals is None:
-            marginals = self.gmm_per_road
-        if joints is None:
-            joints = self.gmm_joint_road_road
-
-        topo_order = list(nx.topological_sort(self.network))
-        total_entropy = 0.0
-        for node in topo_order:
-            parents = list(self.network.predecessors(node))
-            if not parents:
-                gmm = marginals[node]
-                entropy = self.calculate_gmm_entropy_approximation(gmm)
-                if verbose > 1:
-                    print(f"Node {node} (root): H({node}) = {entropy:.4f}")
-
-            else:
-                assert node in joints, 'The node does not have parent.'
-                parent_ids, joint_gmm = joints[node]['parents'], joints[node]['joints']
-                h_joint = self.calculate_gmm_entropy_approximation(joint_gmm)
-
-                joint_samples = joint_gmm.sample(self.n_samples)[0]  # NOTE: time-consuming!!
-                parent_samples = joint_samples[:, 1:]
-                h_parents = self.calculate_gmm_entropy_approximation(self._optimal_gmm(parent_samples))
-
-                entropy = h_joint - h_parents
-                if verbose > 1:
-                    print(f"Node {node}: H({node}|{parents}) = {entropy:.4f}")
-            total_entropy += entropy
-        if verbose >= 1:
-            print(f"Total Entropy of the Bayesian Network: {total_entropy}")
-        return total_entropy
 
     def update_joints_legacy(
             self, orig_joint, orig_xk, observed_xk, xk_name, all_parent_ids,
@@ -381,44 +476,6 @@ class TrafficBayesNetwork:
         indices = np.random.choice(self.n_samples, size=self.n_samples, p=weights, replace=True)
         return joint_samples[indices]
 
-    def update_joints_multi_variable(
-            self, orig_joint, orig_xk_list: list, observed_xk_list: list, xk_name_list: list, all_ids: list,
-    ):
-        """
-        xk is the parent node who gets new information
-        orig_xk_list: original marginals of xk
-        observed_xk_list: observed marginals of xk
-        xk_name: the names of xk
-        all_ids: the names of all parent nodes, may be a big set than xk
-        """
-
-        assert len(orig_xk_list) == len(observed_xk_list) == len(xk_name_list)
-
-        # sample from original joint, p(A, B_1, B_2), for example
-        joint_samples = orig_joint.sample(self.n_samples)[0]
-        xk_idx_list = []
-        for xk_name in xk_name_list:
-            xk_idx = all_ids.index(xk_name)
-            xk_idx_list.append(xk_idx)
-        xk_samples = joint_samples[:, xk_idx_list]
-
-        # get the ratio term, p'(B_1)/p(B_1) or p'(B_1 B_2)/p(B_1 B_2,) etc.
-        # in the Bayesian Network, B_1 and B_2 are assumed to be independent
-        observed_xk_score = 1
-        for observed_xk, i in zip(observed_xk_list, range(xk_samples.shape[1])):
-            observed_xk_score *= observed_xk.score_samples(xk_samples[:, [i]])
-
-        orig_xk_score = 1
-        for orig_xk, i in zip(orig_xk_list, range(xk_samples.shape[1])):
-            orig_xk_score *= orig_xk.score_samples(xk_samples[:, [i]])
-
-        log_weights = observed_xk_score - orig_xk_score
-        weights = np.exp(log_weights - np.max(log_weights))
-        weights /= weights.sum()
-
-        # apply the ratio term
-        indices = np.random.choice(self.n_samples, size=self.n_samples, p=weights, replace=True)
-        return joint_samples[indices]
 
     @staticmethod
     def gmm_pdf(gmm, y_grid):
@@ -428,31 +485,6 @@ class TrafficBayesNetwork:
         for weight, mean, var in zip(gmm.weights_, gmm.means_.flatten(), gmm.covariances_.flatten()):
             pdf += weight * norm.pdf(y_grid, loc=mean, scale=np.sqrt(var))
         return pdf
-
-    @staticmethod
-    def marginalize_gmm(gmm, var_idx):
-        # part of the quick algo
-        n_components = gmm.n_components
-
-        # Build new 1D GMM manually
-        marginal_gmm = GaussianMixture(n_components=n_components, covariance_type='full')
-
-        # Set parameters
-        marginal_gmm.weights_ = np.copy(gmm.weights_)
-
-        # Extract 1D means and variances
-        marginal_means = gmm.means_[:, var_idx].reshape(-1, 1)
-        marginal_covariances = np.zeros((n_components, 1, 1))
-
-        for k in range(n_components):
-            var = gmm.covariances_[k][var_idx, var_idx]
-            marginal_covariances[k, 0, 0] = var
-
-        marginal_gmm.means_ = marginal_means
-        marginal_gmm.covariances_ = marginal_covariances
-        marginal_gmm.precisions_cholesky_ = 1.0 / np.sqrt(marginal_covariances)
-
-        return marginal_gmm
 
     def update_joints_multi_variable_backup(
             self, orig_joint, orig_xk_list: list, observed_xk_list: list, xk_name_list: list, all_ids: list,
@@ -575,6 +607,56 @@ class TrafficBayesNetwork:
 
         return marginals_updated, joints_updated
 
+    def update_joints_multi_variable(
+            self, orig_joint, orig_xk_list: list, observed_xk_list: list, xk_name_list: list, all_ids: list,
+            avoid_numerical_issue=True
+    ):
+        """
+        xk is the parent node who gets new information
+        orig_xk_list: original marginals of xk
+        observed_xk_list: observed marginals of xk
+        xk_name: the names of xk
+        all_ids: the names of all parent nodes, may be a big set than xk
+        """
+
+        assert len(orig_xk_list) == len(observed_xk_list) == len(xk_name_list)
+
+        # sample from original joint, p(A, B_1, B_2), for example
+        joint_samples = orig_joint.sample(self.n_samples)[0]
+        xk_idx_list = [all_ids.index(name) for name in xk_name_list]
+        # xk_idx_list = []
+        # for xk_name in xk_name_list:
+        #     xk_idx = all_ids.index(xk_name)
+        #     xk_idx_list.append(xk_idx)
+        xk_samples = joint_samples[:, xk_idx_list]
+
+        # get the ratio term, p'(B_1)/p(B_1) or p'(B_1 B_2)/p(B_1 B_2,) etc.
+        # in the Bayesian Network, B_1 and B_2 are assumed to be independent
+        observed_xk_score = 1
+        for observed_xk, i in zip(observed_xk_list, range(xk_samples.shape[1])):
+            observed_xk_score *= observed_xk.score_samples(xk_samples[:, [i]])
+
+        orig_xk_score = 1
+        for orig_xk, i in zip(orig_xk_list, range(xk_samples.shape[1])):
+            orig_xk_score *= orig_xk.score_samples(xk_samples[:, [i]])
+
+        sample_size = self.n_samples
+        if avoid_numerical_issue:
+            # remove the bottom 1% samples (who could have very low probability) to avoid numerical issue
+            bottom_1_percent_indices = np.where(orig_xk_score <= np.percentile(orig_xk_score, 1))[0]
+            joint_samples = np.delete(joint_samples, bottom_1_percent_indices, axis=0)
+            observed_xk_score = np.delete(observed_xk_score, bottom_1_percent_indices, axis=0)
+            orig_xk_score = np.delete(orig_xk_score, bottom_1_percent_indices, axis=0)
+            sample_size = self.n_samples - bottom_1_percent_indices.size
+
+        log_weights = observed_xk_score - orig_xk_score
+        weights = np.exp(log_weights - np.max(log_weights))
+        weights /= weights.sum()
+
+        # apply the ratio term
+        indices = np.random.choice(sample_size, size=sample_size, p=weights, replace=True)
+        return joint_samples[indices]
+
     def update_network_with_multiple_soft_evidence_downward(
             self, signal_dict: dict, marginals, joints, verbose=1,
     ):
@@ -626,41 +708,34 @@ class TrafficBayesNetwork:
                 if remaining_parents_n[child] > 0:
                     continue  # not all reachable parents are ready
 
-                # update joint
+                # update joints and marginals (backup, it can produce updated joints)
                 parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
                 assert current_node in parent_ids
-
                 resampled_joint_samples = self.update_joints_multi_variable(
                     joint_gmm,
                     [marginals_fixed[p] for p in reachable[child]],
                     [marginals_updated[p] for p in reachable[child]],
                     reachable[child], [child] + parent_ids,
                 )
-                new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
 
-                joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
+                # new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
+                # joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
+                # if verbose > 0:
+                #     print(f"Updated joint for {child} with parents {parent_ids}")
 
-                if verbose > 0:
-                    print(f"Updated joint for {child} with parents {parent_ids}")
-
-                # update marginal
                 resampled_child_samples = resampled_joint_samples[:, [0]]
                 new_child_gmm = self._optimal_gmm(resampled_child_samples,)
                 marginals_updated[child] = new_child_gmm
 
-                # fast algo
+                # # fast algo
                 # new_joint_gmm = self.update_joints_multi_variable_backup(
                 #     joint_gmm,
                 #     [marginals_fixed[p] for p in reachable[child]],
                 #     [marginals_updated[p] for p in reachable[child]],
                 #     reachable[child], [child] + parent_ids,
                 # )
-                # joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
-                # if verbose > 0:
-                #     print(f"Updated joint for {child} with parents {parent_ids}")
-                # new_marginal = self.marginalize_gmm(new_joint_gmm, 0)
-                # marginals_updated[child] = new_marginal
-
+                # new_child_gmm = marginalize_gmm(new_joint_gmm, 0)
+                # marginals_updated[child] = new_child_gmm
 
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
@@ -758,13 +833,55 @@ class TrafficBayesNetwork:
         marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_downward(
             signal_dict, marginals_in, joints_in, verbose=verbose
         )
-        marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_upward(
-            signal_dict, marginals_out, joints_out, verbose=verbose,
-        )
+        # marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_upward(
+        #     signal_dict, marginals_out, joints_out, verbose=verbose,
+        # )
         """
         A function is needed to handle the multi GMM not influenced by the propagation.
         """
         return marginals_out, joints_out
+
+    def calculate_gmm_entropy_approximation(self, gmm):
+        samples, _ = gmm.sample(self.n_samples)
+        log_probs = gmm.score_samples(samples)
+        entropy = -np.mean(log_probs)
+        return entropy
+
+    def calculate_network_entropy(self, marginals=None, joints=None, verbose=1):
+        # if the node has no parent, the marginal was used
+        # if the node has parents, joint and the marginal refitted from joint sampling was used
+
+        if marginals is None:
+            marginals = self.marginals
+        if joints is None:
+            joints = self.joints
+
+        topo_order = list(nx.topological_sort(self.network))
+        total_entropy = 0.0
+        for node in topo_order:
+            parents = list(self.network.predecessors(node))
+            if not parents:
+                gmm = marginals[node]
+                entropy = self.calculate_gmm_entropy_approximation(gmm)
+                if verbose > 1:
+                    print(f"Node {node} (root): H({node}) = {entropy:.4f}")
+
+            else:
+                assert node in joints, 'The node does not have parent.'
+                parent_ids, joint_gmm = joints[node]['parents'], joints[node]['joints']
+                h_joint = self.calculate_gmm_entropy_approximation(joint_gmm)
+
+                joint_samples = joint_gmm.sample(self.n_samples)[0]  # NOTE: time-consuming!!
+                parent_samples = joint_samples[:, 1:]
+                h_parents = self.calculate_gmm_entropy_approximation(self._optimal_gmm(parent_samples))
+
+                entropy = h_joint - h_parents
+                if verbose > 1:
+                    print(f"Node {node}: H({node}|{parents}) = {entropy:.4f}")
+            total_entropy += entropy
+        if verbose >= 1:
+            print(f"Total Entropy of the Bayesian Network: {total_entropy}")
+        return total_entropy
 
     def calculate_network_conditional_entropy(self, network_list, verbose=1, label=None):
         """
@@ -805,11 +922,11 @@ class TrafficBayesNetwork:
         network_0, network_1 = network_list[0], network_list[1]
 
         divergence_0 = 0
-        for prior, posterior in zip(list(self.gmm_per_road.values()), list(network_0['marginals'].values())):
+        for prior, posterior in zip(list(self.marginals.values()), list(network_0['marginals'].values())):
             divergence_0 += self.calculate_kl_divergence_gmm(posterior, prior)
 
         divergence_1 = 0
-        for prior, posterior in zip(list(self.gmm_per_road.values()), list(network_1['marginals'].values())):
+        for prior, posterior in zip(list(self.marginals.values()), list(network_1['marginals'].values())):
             divergence_1 += self.calculate_kl_divergence_gmm(posterior, prior)
 
         divergence = divergence_0 * network_0['p'] + divergence_1 * network_1['p']
@@ -863,15 +980,16 @@ class TrafficBayesNetwork:
         return entropies
 
     def convert_state_to_dist(self, inferred_states):
+        inferred_states_filtered = {k: v for k, v in inferred_states.items() if k in list(self.signal.keys())}
         signal = {
             k: (
-                self.gmm_joint_flood_road[k]['speed_flood']
+                self.signal[k]['speed_flood']
                 if v == 'flooded'
-                else self.gmm_joint_flood_road[k]['speed_no_flood']
+                else self.signal[k]['speed_no_flood']
                 if v == 'not flooded'
                 else None
             )
-            for k, v in inferred_states.items()
+            for k, v in inferred_states_filtered.items()
         }
         return signal
 
@@ -899,6 +1017,27 @@ class TrafficBayesNetwork:
         except Exception as e:
             print('Failed to load Traffic Bayesian Network, build from scratch')
             return False
+
+    def organize_keys(self):
+        # check consistency between joints and the graph
+        assert set(self.joints.keys()).issubset(self.network.nodes())  # joints are a subset of graph
+        mentioned_nodes = set(self.joints.keys())  # dict keys
+        for value in self.joints.values():
+            mentioned_nodes.update(value.get('parents', []))  # add parents
+        assert mentioned_nodes == set(self.network.nodes), "Mentioned nodes must equal graph nodes"
+
+        # check marginals and joints/network
+        common_keys = set(self.network.nodes()) & set(self.marginals.keys())
+        self.marginals = {k: v for k, v in self.marginals.items() if k in common_keys}
+
+        # check signals and joints/network
+        self.signal = {
+            k: v for k, v in self.signal.items()
+            if v['speed_no_flood'] is not None and v['speed_flood'] is not None
+        }
+        common_keys = set(self.network.nodes()) & set(self.signal.keys())
+        self.signal = {k: v for k, v in self.signal.items() if k in common_keys}
+
 
 class FloodBayesNetwork:
     def __init__(self, t_window: str = 'D'):
@@ -1299,4 +1438,44 @@ class MultiGaussianMixture:
         return log_total_density
 
 
+def marginalize_gmm(gmm, var_idx):
+    # part of the quick algo
+    n_components = gmm.n_components
+
+    # Build new 1D GMM manually
+    marginal_gmm = GaussianMixture(n_components=n_components, covariance_type='full')
+
+    # Set parameters
+    marginal_gmm.weights_ = np.copy(gmm.weights_)
+
+    # Extract 1D means and variances
+    marginal_means = gmm.means_[:, var_idx].reshape(-1, 1)
+    marginal_covariances = np.zeros((n_components, 1, 1))
+
+    for k in range(n_components):
+        var = gmm.covariances_[k][var_idx, var_idx]
+        marginal_covariances[k, 0, 0] = var
+
+    marginal_gmm.means_ = marginal_means
+    marginal_gmm.covariances_ = marginal_covariances
+    marginal_gmm.precisions_cholesky_ = 1.0 / np.sqrt(marginal_covariances)
+
+    return marginal_gmm
+
+
+def check_gmr_bn_consistency(node_list: list, joints: dict):
+    for node in node_list:
+        if node in ['4616305', '4616323', '4616351', '4616353', '4620314', '4620330', '4620331', '4620332']:
+            print(f'Check node {node}')
+            joints_list = []
+            for k, v in joints.items():
+                if node == k or (node in v['parents']):
+                    joints_list.append({k: v})
+            if len(joints_list) > 1:
+                for j in joints_list:
+                    joint = list(j.values())[0]['joints']
+                    v_list = list(j.keys()) + list(j.values())[0]['parents']
+                    node_index = v_list.index(node)
+                    marginal = marginalize_gmm(joint, node_index)
+                    vis.dist_gmm_1d(marginal, title=node)
 

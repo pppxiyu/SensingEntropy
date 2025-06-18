@@ -12,18 +12,20 @@ np.random.seed(0)
 
 import pickle
 import os
+import warnings
 
 """
 Load cache
 """
+road_data = data.RoadData()
+load_r = road_data.load_instance('./cache/classes/road_data')
 bayes_network_f = model.FloodBayesNetwork()
 load_f = bayes_network_f.load_instance('./cache/classes/bayes_network_f')
 bayes_network_t = model.TrafficBayesNetwork()
 load_t = bayes_network_t.load_instance('./cache/classes/bayes_network_t')
-road_data = data.RoadData()
-load_r = road_data.load_instance('./cache/classes/road_data')
-if not (load_f and load_t and load_r):
 
+
+if not load_r:
     """
     Data
     """
@@ -47,6 +49,7 @@ if not (load_f and load_t and load_r):
 
     road_data.save_instance('./cache/classes/road_data')
 
+if not load_f:
     """
     Modeling
     """
@@ -60,48 +63,52 @@ if not (load_f and load_t and load_r):
     bayes_network_f.fit_conditional(road_data.closures)
     bayes_network_f.build_bayes_network()
 
-    # Fit marginals - speed
-    bayes_network_t = mo.TrafficBayesNetwork(10000, 2)
-    bayes_network_t.fit_marginal(road_data.speed)
-    # for seg in road_data.speed['link_id'].unique()[0: 10]:
-    #     vis.dist_histo_gmm_1d(
-    #         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
-    #         bayes_network_t.gmm_per_road[seg]
-    #     )  # FIGURE X: marginal distributions on roads
+    bayes_network_f.save_instance('./cache/classes/bayes_network_f')
 
-    # Fit joints - speed
-    bayes_network_t.build_network_from_geo(road_data.geo, mode='causal', remove_no_data_segment=True)
+if not load_t:
+    # Init
+    bayes_network_t = mo.TrafficBayesNetwork(
+        speed=road_data.speed_resampled, road_geo=road_data.geo, network_mode='causal',
+        n_samples=10000, n_components=12, fitting_mode='one-off',
+        remove_nodes=remove_data_from_nodes,
+    )
     # vis.map_roads_n_topology_plt(
     #     geo_roads=road_data.geo.copy(),
     #     network=bayes_network_t.network.copy(), network_geo_roads=road_data.geo.copy(),
     #     local_crs=local_crs, city_shp_path=dir_city_boundary,
     # ) # FIGURE 1: road network and topology
-    bayes_network_t.fit_joint(road_data.speed_resampled)
-    # for k, v in list(bayes_network_t.gmm_joint_road_road.items()):
+
+    # Fit joints - speed
+    bayes_network_t.fit_joint()
+    # for k, v in list(bayes_network_t.joints.items()):
     #     if len(v['parents']) == 1:  # the vis only support 3d
     #         print(f'Joint distributions at {k}')
     #         vis.dist_gmm_3d(v['joints'], k, v['parents'][0])  # FIGURE 2: joint distributions between roads
 
-    # Fit signals
-    bayes_network_t.fit_joint_flood_n_speed(
-        road_data.flood_time_per_road, road_data.speed_resampled, bayes_network_f.marginals
-    )
-    # for k, v in bayes_network_t.gmm_joint_flood_road.items():
-    #     print(f'Distributions under observations at {k}')
-    #     vis.dist_discrete_gmm(v, bayes_network_t.gmm_per_road[k],)  # FIGURE 3: distribution with observation
+    # Fit marginals - speed
+    bayes_network_t.fit_marginal()
+    # for seg in road_data.speed['link_id'].unique()[0: 10]:
+    #     vis.dist_histo_gmm_1d(
+    #         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
+    #         bayes_network_t.marginals[seg]
+    #     )  # FIGURE X: marginal distributions on roads
 
-    """
-    Cache class
-    """
-    bayes_network_f.save_instance('./cache/classes/bayes_network_f')
+    # Fit signals
+    bayes_network_t.fit_signal(road_data.flood_time_per_road, bayes_network_f.marginals)
+    # for k, v in bayes_network_t.signal.items():
+    #     print(f'Distributions under observations at {k}')
+    #     vis.dist_discrete_gmm(v, bayes_network_t.marginals[k],)  # FIGURE 3: distribution with observation
+
+    bayes_network_t.organize_keys()
     bayes_network_t.save_instance('./cache/classes/bayes_network_t')
+# mo.check_gmr_bn_consistency(list(bayes_network_t.marginals.keys()), bayes_network_t.joints)
 
 """
 Inference and placement
 """
 # Update network with observation
-marginals = bayes_network_t.gmm_per_road.copy()
-joints = bayes_network_t.gmm_joint_road_road.copy()
+marginals = bayes_network_t.marginals.copy()
+joints = bayes_network_t.joints.copy()
 for n in range(sensor_count):
 
     # get records
@@ -113,9 +120,7 @@ for n in range(sensor_count):
         print(f"Loading failed ({e}), continuing with calculation.")
 
         results = {}
-        for k, v in bayes_network_t.gmm_joint_flood_road.items():
-            if not ((v['speed_no_flood'] is not None) and (v['speed_flood'] is not None)):
-                continue
+        for k, v in bayes_network_t.signal.items():
             inferred_signals_no_flood = bayes_network_t.convert_state_to_dist(
                 bayes_network_f.infer_node_states(k, 0, 1, 1)
             )
@@ -142,7 +147,7 @@ for n in range(sensor_count):
             # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
             #     z_max = vis.dist_gmm_3d(joints_flood[k][1], k, joints_flood[k][0][0], return_z_max=True)
             #     vis.dist_gmm_3d(
-            #         bayes_network_t.gmm_joint_road_road[k][1], k, bayes_network_t.gmm_joint_road_road[k][0][0],
+            #         bayes_network_t.joints[k][1], k, bayes_network_t.joints[k][0][0],
             #         z_limit=z_max
             #     )  # FIGURE 4: joint distributions changes
 
@@ -150,7 +155,7 @@ for n in range(sensor_count):
         with open(f"./cache/results/sensing_{n}.pkl", "wb") as f:
             pickle.dump(results, f)
 
-    # # interpret records
+    # # # interpret records
     # place = max(results, key=lambda x: results[x]['info_gain'])
     # print(f"Flood sensing at {place}")
     # marginals, joints = bayes_network_t.compress_multi_gmm({k: v['bn_updated'] for k, v in results.items()})
@@ -159,22 +164,40 @@ for n in range(sensor_count):
     #     road_data.geo.copy(), results, city_shp_path=dir_city_boundary
     # )  # FIGURE 6: entropy map
 
+
 """
 Validation
 """
+
 for k in results.keys():
     speed_data = road_data.get_data_when_sensing_on(k)
-    speed_calculator = mo.TrafficBayesNetwork(10000, 3)
-    speed_calculator.fit_marginal(speed_data)
+    speed_calculator = mo.TrafficBayesNetwork(
+        speed=road_data.speed_resampled, road_geo=road_data.geo, network_mode='causal',
+        n_samples=10000, n_components=12, fitting_mode='one-off',
+        remove_nodes=remove_data_from_nodes,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        speed_calculator.fit_marginal()
 
     _ = speed_calculator.calculate_network_kl_divergence([
         results[k]['bn_updated'][1]['marginals'],  # estimate
-        speed_calculator.gmm_per_road,  # ground truth
+        speed_calculator.marginals,  # ground truth
     ])
     _ = speed_calculator.calculate_network_kl_divergence([
-        bayes_network_t.gmm_per_road,  # historical
-        speed_calculator.gmm_per_road,  # ground truth
+        bayes_network_t.marginals,  # historical
+        speed_calculator.marginals,  # ground truth
     ])
+
+    common_k = speed_calculator.marginals.keys() & results[k]['bn_updated'][1]['marginals'].keys()
+    for kk in list(common_k):
+        if np.array_equal(results[k]['bn_updated'][1]['marginals'][kk].means_,
+                          bayes_network_t.marginals[kk].means_, ):
+            continue
+        vis.dist_gmm_1d(speed_calculator.marginals[kk])
+        vis.dist_gmm_1d(results[k]['bn_updated'][1]['marginals'][kk])
+        vis.dist_gmm_1d(bayes_network_t.marginals[kk])
+        print(kk)
 
 pass
 
