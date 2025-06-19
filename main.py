@@ -86,7 +86,7 @@ if not load_t:
     #         vis.dist_gmm_3d(v['joints'], k, v['parents'][0])  # FIGURE 2: joint distributions between roads
 
     # Fit marginals - speed
-    bayes_network_t.fit_marginal()
+    bayes_network_t.fit_marginal_from_data()
     # for seg in road_data.speed['link_id'].unique()[0: 10]:
     #     vis.dist_histo_gmm_1d(
     #         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
@@ -178,7 +178,7 @@ for k in results.keys():
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        speed_calculator.fit_marginal()
+        speed_calculator.fit_marginal_from_data()
 
     _ = speed_calculator.calculate_network_kl_divergence([
         results[k]['bn_updated'][1]['marginals'],  # estimate

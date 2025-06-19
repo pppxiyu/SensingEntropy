@@ -365,7 +365,7 @@ class TrafficBayesNetwork:
             gmm.fit(x)
             return gmm
 
-    def fit_marginal(self):
+    def fit_marginal_from_data(self):
         segment_gmms = {}
         for segment, data in self.speed_data.copy().groupby("link_id"):
             speeds = data["speed"].values.reshape(-1, 1)
@@ -632,13 +632,13 @@ class TrafficBayesNetwork:
 
         # get the ratio term, p'(B_1)/p(B_1) or p'(B_1 B_2)/p(B_1 B_2,) etc.
         # in the Bayesian Network, B_1 and B_2 are assumed to be independent
-        observed_xk_score = 1
+        observed_xk_score = 0
         for observed_xk, i in zip(observed_xk_list, range(xk_samples.shape[1])):
-            observed_xk_score *= observed_xk.score_samples(xk_samples[:, [i]])
+            observed_xk_score += observed_xk.score_samples(xk_samples[:, [i]])
 
-        orig_xk_score = 1
+        orig_xk_score = 0
         for orig_xk, i in zip(orig_xk_list, range(xk_samples.shape[1])):
-            orig_xk_score *= orig_xk.score_samples(xk_samples[:, [i]])
+            orig_xk_score += orig_xk.score_samples(xk_samples[:, [i]])
 
         sample_size = self.n_samples
         if avoid_numerical_issue:
@@ -726,6 +726,8 @@ class TrafficBayesNetwork:
                 resampled_child_samples = resampled_joint_samples[:, [0]]
                 new_child_gmm = self._optimal_gmm(resampled_child_samples,)
                 marginals_updated[child] = new_child_gmm
+                # vis.dist_gmm_1d(marginals_updated[child])
+                # vis.dist_gmm_1d(new_child_gmm)
 
                 # # fast algo
                 # new_joint_gmm = self.update_joints_multi_variable_backup(
