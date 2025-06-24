@@ -374,6 +374,40 @@ class TrafficBayesNetwork:
         self.marginals = segment_gmms
         return
 
+    def fit_marginal_from_joints(self):
+        """
+        Get marginal from the joint distributions. If the node has no parent nodes, get marginal
+        from the joint where it is a parent node; if the node has parent nodes, get marginal
+        from the joint where it is a child node.
+        """
+        all_nodes = set(self.joints.keys())  # get all nodes mentioned
+        for entry in self.joints.values():
+            all_nodes.update(entry['parents'])
+
+        marginals = {}
+
+        for node in all_nodes:
+            found = False
+            # Case 1: node is a child. It is in keys and has joint
+            if node in self.joints:
+                gmm = self.joints[node]['joints']
+                marginals[node] = marginalize_gmm(gmm, 0)
+                found = True
+            else:
+                # Case 2: node is a root node. Find a child where it's a parent
+                for child, info in self.joints.items():
+                    if node in info['parents']:
+                        gmm = info['joints']
+                        var_order = [child] + info['parents']
+                        idx = var_order.index(node)
+                        marginals[node] = marginalize_gmm(gmm, idx)
+                        found = True
+                        break
+            assert found, f"Could not find a joint distribution for node {node}"
+
+        self.marginals = marginals
+        return
+
     def fit_joint(self):
         df = self.speed_data.copy()
         dependency_gmms = {}
@@ -392,11 +426,6 @@ class TrafficBayesNetwork:
             ).dropna()
             child_data = df[df['link_id'] == child].set_index('time')["speed"].dropna()
 
-            # parent_data = parent_data.reindex(child_data.index).dropna()
-            # child_data = child_data.reindex(parent_data.index).dropna()
-            # if len(parent_data) == 0 or len(child_data) == 0:
-            #     continue
-
             x = child_data.values.reshape(-1, 1)
             y = parent_data.values  # keep the child at the first dim
 
@@ -413,9 +442,10 @@ class TrafficBayesNetwork:
         self.joints = dependency_gmms
         return
 
-    def fit_signal(self, flood_time, flood_prob, verbose=0):
+    def fit_signal(self, flood_time, flood_prob, mode='from_marginal', verbose=0):
         import warnings
 
+        assert mode in ['from_marginal', 'from_data']
         speed = self.speed_data.copy()
         dists = {}
         for _, row in flood_prob.iterrows():
@@ -436,8 +466,20 @@ class TrafficBayesNetwork:
             for _, event in flood_events.iterrows():
                 mask = (speed_data['time'] >= event['buffer_start']) & (speed_data['time'] <= event['buffer_end'])
                 speed_data.loc[mask, 'flooded'] = True
-            speed_flood = speed_data[speed_data['flooded']]['speed']
-            speed_no_flood = speed_data[~speed_data['flooded']]['speed']
+
+            speed_no_flood, speed_flood = None, None
+            if mode == 'from_data':
+                speed_flood = speed_data[speed_data['flooded']]['speed']
+                speed_no_flood = speed_data[~speed_data['flooded']]['speed']
+            elif mode == 'from_marginal':
+                assert self.marginals is not None, 'Marginals have not been fit yet'
+                marginal = self.marginals[link_id]
+                samples = marginal.sample(len(speed_data))[0]
+
+                speed_data = speed_data.sort_values(by='speed')
+                samples = np.sort(samples, axis=0)
+                speed_flood = pd.Series(samples[speed_data['flooded'].to_numpy()][:, 0])
+                speed_no_flood = pd.Series(samples[~speed_data['flooded'].to_numpy()][:, 0])
 
             def get_gmm(df):
                 if (len(df)) > 50 and (df.sum() != 0):
@@ -624,10 +666,6 @@ class TrafficBayesNetwork:
         # sample from original joint, p(A, B_1, B_2), for example
         joint_samples = orig_joint.sample(self.n_samples)[0]
         xk_idx_list = [all_ids.index(name) for name in xk_name_list]
-        # xk_idx_list = []
-        # for xk_name in xk_name_list:
-        #     xk_idx = all_ids.index(xk_name)
-        #     xk_idx_list.append(xk_idx)
         xk_samples = joint_samples[:, xk_idx_list]
 
         # get the ratio term, p'(B_1)/p(B_1) or p'(B_1 B_2)/p(B_1 B_2,) etc.
@@ -726,8 +764,6 @@ class TrafficBayesNetwork:
                 resampled_child_samples = resampled_joint_samples[:, [0]]
                 new_child_gmm = self._optimal_gmm(resampled_child_samples,)
                 marginals_updated[child] = new_child_gmm
-                # vis.dist_gmm_1d(marginals_updated[child])
-                # vis.dist_gmm_1d(new_child_gmm)
 
                 # # fast algo
                 # new_joint_gmm = self.update_joints_multi_variable_backup(
@@ -804,22 +840,17 @@ class TrafficBayesNetwork:
 
                 resampled_joint_samples = self.update_joints_multi_variable(
                     joint_gmm,
-                    [marginals_fixed[current_node]], [marginals_updated[current_node]],
+                    [marginals_fixed[current_node]],
+                    [marginals_updated[current_node]],
                     [current_node], [current_node] + parent_ids,
                 )
-
-                new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
-                joints_updated[current_node] = {'parents': parent_ids, 'joints': new_joint_gmm}
-
-                if verbose > 0:
-                    print(f"Updated joint for {child} with parents {parent_ids}")
 
                 # update marginal
                 for p in parent_ids:
                     all_id = [current_node] + parent_ids
                     idx = all_id.index(p)
                     resampled_child_samples = resampled_joint_samples[:, [idx]]
-                    new_child_gmm = self._optimal_gmm(resampled_child_samples, )
+                    new_child_gmm = self._optimal_gmm(resampled_child_samples)
                     marginals_updated[child] = new_child_gmm
 
                 if verbose > 0:

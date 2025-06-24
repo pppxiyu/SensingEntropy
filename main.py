@@ -7,8 +7,10 @@ import visualization as vis
 
 import random
 import numpy as np
+
 random.seed(0)
 np.random.seed(0)
+df_random_seed = 0
 
 import pickle
 import os
@@ -23,7 +25,6 @@ bayes_network_f = model.FloodBayesNetwork()
 load_f = bayes_network_f.load_instance('./cache/classes/bayes_network_f')
 bayes_network_t = model.TrafficBayesNetwork()
 load_t = bayes_network_t.load_instance('./cache/classes/bayes_network_t')
-
 
 if not load_r:
     """
@@ -44,7 +45,10 @@ if not load_r:
     road_data.infer_flooding_time_per_road()
 
     # Pull traffic data in flooding periods
-    road_data.pull_nyc_dot_traffic_flooding(dir_NYC_data_token)
+    road_data.pull_nyc_dot_traffic_flooding(
+        dir_NYC_data_token,
+        select_incidents=road_data.flood_time_citywide.copy().sample(frac=0.8, random_state=df_random_seed)
+    )
     road_data.resample_nyc_dot_traffic(road_data.speed)
 
     road_data.save_instance('./cache/classes/road_data')
@@ -59,7 +63,7 @@ if not load_f:
     # vis.bar_flood_prob(bayes_network_f.marginals.iloc[48])  # FIGURE 5: flood probability
 
     # Fit conditionals - flood
-    bayes_network_f.build_network_by_co_occurrence(road_data.closures,  weight_thr=0.2)
+    bayes_network_f.build_network_by_co_occurrence(road_data.closures, weight_thr=0.2)
     bayes_network_f.fit_conditional(road_data.closures)
     bayes_network_f.build_bayes_network()
 
@@ -86,7 +90,7 @@ if not load_t:
     #         vis.dist_gmm_3d(v['joints'], k, v['parents'][0])  # FIGURE 2: joint distributions between roads
 
     # Fit marginals - speed
-    bayes_network_t.fit_marginal_from_data()
+    bayes_network_t.fit_marginal_from_joints()
     # for seg in road_data.speed['link_id'].unique()[0: 10]:
     #     vis.dist_histo_gmm_1d(
     #         road_data.speed[road_data.speed['link_id'] == seg]['speed'].values,
@@ -94,7 +98,7 @@ if not load_t:
     #     )  # FIGURE X: marginal distributions on roads
 
     # Fit signals
-    bayes_network_t.fit_signal(road_data.flood_time_per_road, bayes_network_f.marginals)
+    bayes_network_t.fit_signal(road_data.flood_time_per_road, bayes_network_f.marginals, mode='from_marginal')
     # for k, v in bayes_network_t.signal.items():
     #     print(f'Distributions under observations at {k}')
     #     vis.dist_discrete_gmm(v, bayes_network_t.marginals[k],)  # FIGURE 3: distribution with observation
@@ -141,7 +145,6 @@ for n in range(sensor_count):
             ]
             results[k] = {
                 'bn_updated': bn_updated,
-                # 'entropy': bayes_network_t.calculate_network_conditional_entropy(bn_updated, label=k),
                 'info_gain': bayes_network_t.calculate_network_conditional_kl_divergence(bn_updated, label=k),
             }
             # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):
@@ -164,40 +167,51 @@ for n in range(sensor_count):
     #     road_data.geo.copy(), results, city_shp_path=dir_city_boundary
     # )  # FIGURE 6: entropy map
 
-
 """
 Validation
 """
+road_data_test = dd.RoadData()
+for i in road_data.flood_time_citywide.copy().drop(
+        road_data.flood_time_citywide.copy().sample(frac=0.8, random_state=df_random_seed).index
+).index:
+    # get incident data
+    d = road_data_test.pull_nyc_dot_traffic_flooding(
+        dir_NYC_data_token,
+        select_incidents=road_data.flood_time_citywide.copy().iloc[[i]]  # specify the incident
+    )
+    if d is None:
+        continue
+    road_data_test.resample_nyc_dot_traffic(road_data_test.speed)  # process the data of the incident
+    roads_flooded = road_data_test.get_flooded_roads_during_inct(
+        road_data.flood_time_per_road, road_data.flood_time_citywide.copy().iloc[[i]]
+    )  # get flooded roads of the incident for the following calculation
 
-for k in results.keys():
-    speed_data = road_data.get_data_when_sensing_on(k)
-    speed_calculator = mo.TrafficBayesNetwork(
-        speed=road_data.speed_resampled, road_geo=road_data.geo, network_mode='causal',
+    # fit marginals as the ground truth
+    bn_t_test = mo.TrafficBayesNetwork(
+        speed=road_data_test.speed_resampled, road_geo=road_data.geo, network_mode='causal',
         n_samples=10000, n_components=12, fitting_mode='one-off',
         remove_nodes=remove_data_from_nodes,
     )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        speed_calculator.fit_marginal_from_data()
+    bn_t_test.fit_joint()
+    bn_t_test.fit_marginal_from_joints()
 
-    _ = speed_calculator.calculate_network_kl_divergence([
-        results[k]['bn_updated'][1]['marginals'],  # estimate
-        speed_calculator.marginals,  # ground truth
-    ])
-    _ = speed_calculator.calculate_network_kl_divergence([
+    # make estimate (in a very simple way)
+    # showing when the flooding sensing count increases, the estimate get more accurate
+    _ = bayes_network_t.calculate_network_kl_divergence([
         bayes_network_t.marginals,  # historical
-        speed_calculator.marginals,  # ground truth
+        bn_t_test.marginals,  # ground truth
     ])
-
-    common_k = speed_calculator.marginals.keys() & results[k]['bn_updated'][1]['marginals'].keys()
-    for kk in list(common_k):
-        if np.array_equal(results[k]['bn_updated'][1]['marginals'][kk].means_,
-                          bayes_network_t.marginals[kk].means_, ):
-            continue
-        vis.dist_gmm_1d(speed_calculator.marginals[kk])
-        vis.dist_gmm_1d(results[k]['bn_updated'][1]['marginals'][kk])
-        vis.dist_gmm_1d(bayes_network_t.marginals[kk])
-        print(kk)
+    for r in roads_flooded:
+        inferred_signals_flood = bayes_network_t.convert_state_to_dist(
+            bayes_network_f.infer_node_states(r, 1, 1, 1)
+        )
+        marginals_flood, joints_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
+            {**{r: bayes_network_t.signal[r]['speed_flood']}, **inferred_signals_flood},
+            marginals, joints, verbose=0
+        )
+        _ = bayes_network_t.calculate_network_kl_divergence([
+            marginals_flood,  # estimate
+            bn_t_test.marginals,  # ground truth
+        ])
 
 pass
-

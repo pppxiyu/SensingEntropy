@@ -276,10 +276,16 @@ class RoadData:
         self.flood_time_per_road = flood_time_per_road
         return
 
-    def pull_nyc_dot_traffic_flooding(self, nyc_data_token):
+    def pull_nyc_dot_traffic_flooding(self, nyc_data_token, select_incidents=None, verbose=0):
         import os
         data_list = []
-        for _, row in self.flood_time_citywide.iterrows():
+
+        if select_incidents is None:
+            select_df = self.flood_time_citywide.copy()
+        else:
+            select_df = select_incidents.copy()
+
+        for _, row in select_df.iterrows():
             start = row['buffer_start']
             end = row['buffer_end']
 
@@ -307,10 +313,17 @@ class RoadData:
                 data_list.append(data)
             except pd.errors.EmptyDataError:
                 pass
-        df_concat = pd.concat(data_list, ignore_index=True)
-        df_concat = self._remove_segment_w_many_na(df_concat)
-        self.speed = df_concat
-        return
+
+        if len(data_list) > 0:
+            df_concat = pd.concat(data_list, ignore_index=True)
+            df_concat = self._remove_segment_w_many_na(df_concat)
+            self.speed = df_concat
+        else:
+            if verbose > 0:
+                import warnings
+                warnings.warn('No data is extracted.')
+            return None
+        return self.speed
 
     def save_instance(self, file):
         import pickle
@@ -390,6 +403,31 @@ class RoadData:
         df_concat = self.resample_nyc_dot_traffic(df_concat, save_2_class=False)
         return df_concat
 
+    @staticmethod
+    def get_flooded_roads_during_inct(flood_time_per_road: dict, inct: pd.DataFrame, overlap_threshold=0.5):
+        assert len(inct) == 1, 'Only one incident is considered here.'
+
+        incident_start = pd.to_datetime(inct.iloc[0]['buffer_start'])
+        incident_end = pd.to_datetime(inct.iloc[0]['buffer_end'])
+        incident_duration = (incident_end - incident_start).total_seconds()
+
+        flooded_segments = []
+        for segment_id, df in flood_time_per_road.items():
+            for _, row in df.iterrows():
+                flood_start = pd.to_datetime(row['buffer_start'])
+                flood_end = pd.to_datetime(row['buffer_end'])
+
+                overlap_start = max(incident_start, flood_start)
+                overlap_end = min(incident_end, flood_end)
+                if overlap_start < overlap_end:
+                    overlap_duration = (overlap_end - overlap_start).total_seconds()
+                    overlap_rate = overlap_duration / incident_duration
+                    if overlap_rate >= overlap_threshold:
+                        flooded_segments.append(segment_id)
+                        break  # One match is enough
+        return flooded_segments
+
+
 def _polyline_parse(string):
     from shapely.geometry import LineString
     from shapely.geometry import Point, box
@@ -408,8 +446,6 @@ def _polyline_parse(string):
         return LineString(cleaned_points)
     except Exception as e:
         return None
-
-
 
 
 def import_nyc_dot_traffic_legacy(dir_file):
