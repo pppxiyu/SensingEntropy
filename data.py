@@ -175,7 +175,7 @@ class RoadData:
         return closure_refine
 
     def resample_nyc_dot_traffic(self, data, time_interval='5min', save_2_class=True):
-        data['time'] = data['time'].dt.round(time_interval)
+        data.loc[:, 'time'] = data['time'].dt.round(time_interval)
         data.set_index("time", inplace=True)
         data_resampled = data.groupby(['link_id', 'time'])["speed"].mean().reset_index()
         if save_2_class:

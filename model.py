@@ -30,8 +30,11 @@ class TrafficBayesNetwork:
         self.network = None
         self.speed_data = None
         self.marginals = None
+        self.marginals_downward = None
+        self.marginals_upward = None
         self.joints = None
-        self.signal = None
+        self.signal_downward = None
+        self.signal_upward = None
 
         self.network_mode = network_mode
         self.n_samples = n_samples
@@ -160,7 +163,7 @@ class TrafficBayesNetwork:
             graph = graph.reverse(copy=True)
         else:
             import warnings
-            warnings.warn('The edge directions follows traffic flow. It should be reverse for Bayesian network. ')
+            warnings.warn('The edge directions follows traffic flow. It should be upward for Bayesian network. ')
 
         if remove_isolated_nodes:
             graph.remove_nodes_from(list(nx.isolates(graph)))
@@ -374,7 +377,7 @@ class TrafficBayesNetwork:
         self.marginals = segment_gmms
         return
 
-    def fit_marginal_from_joints(self):
+    def fit_marginal_from_joints(self, upward=False):
         """
         Get marginal from the joint distributions. If the node has no parent nodes, get marginal
         from the joint where it is a parent node; if the node has parent nodes, get marginal
@@ -388,13 +391,23 @@ class TrafficBayesNetwork:
 
         for node in all_nodes:
             found = False
-            # Case 1: node is a child. It is in keys and has joint
-            if node in self.joints:
+
+            if not upward:
+                if node in self.joints:
+                    case = 1
+                else:
+                    case = 2
+            else:
+                if node not in set([i for k, v in self.joints.items() for i in v['parents']]):
+                    case = 1
+                else:
+                    case = 2
+
+            if case == 1:  # Case 1: marginalize from {node: joint}
                 gmm = self.joints[node]['joints']
                 marginals[node] = marginalize_gmm(gmm, 0)
                 found = True
-            else:
-                # Case 2: node is a root node. Find a child where it's a parent
+            elif case == 2:  # Case 2: marginalize from {the child of the node: joint}
                 for child, info in self.joints.items():
                     if node in info['parents']:
                         gmm = info['joints']
@@ -405,7 +418,10 @@ class TrafficBayesNetwork:
                         break
             assert found, f"Could not find a joint distribution for node {node}"
 
-        self.marginals = marginals
+        if not upward:
+            self.marginals_downward = marginals
+        else:
+            self.marginals_upward = marginals
         return
 
     def fit_joint(self):
@@ -442,7 +458,7 @@ class TrafficBayesNetwork:
         self.joints = dependency_gmms
         return
 
-    def fit_signal(self, flood_time, flood_prob, mode='from_marginal', verbose=0):
+    def fit_signal(self, segment_flood_time, flood_prob, mode='from_marginal', verbose=0, upward=False):
         import warnings
 
         assert mode in ['from_marginal', 'from_data']
@@ -453,7 +469,7 @@ class TrafficBayesNetwork:
             p_flood = row['p']
 
             speed_data = speed[speed['link_id'] == link_id].copy()
-            if speed_data.empty or link_id not in flood_time:
+            if speed_data.empty or link_id not in segment_flood_time:
                 dists[link_id] = {
                     'p_flood': p_flood,
                     'speed_no_flood': None,
@@ -461,7 +477,7 @@ class TrafficBayesNetwork:
                 }
                 continue
 
-            flood_events = flood_time[link_id]
+            flood_events = segment_flood_time[link_id]
             speed_data['flooded'] = False
             for _, event in flood_events.iterrows():
                 mask = (speed_data['time'] >= event['buffer_start']) & (speed_data['time'] <= event['buffer_end'])
@@ -472,8 +488,12 @@ class TrafficBayesNetwork:
                 speed_flood = speed_data[speed_data['flooded']]['speed']
                 speed_no_flood = speed_data[~speed_data['flooded']]['speed']
             elif mode == 'from_marginal':
-                assert self.marginals is not None, 'Marginals have not been fit yet'
-                marginal = self.marginals[link_id]
+                if upward:
+                    assert self.marginals_upward is not None, 'Marginals have not been fit yet'
+                    marginal = self.marginals_upward[link_id]
+                else:
+                    assert self.marginals_downward is not None, 'Marginals have not been fit yet'
+                    marginal = self.marginals_downward[link_id]
                 samples = marginal.sample(len(speed_data))[0]
 
                 speed_data = speed_data.sort_values(by='speed')
@@ -498,7 +518,10 @@ class TrafficBayesNetwork:
                 'speed_no_flood': gmm_no_flood,
                 'speed_flood': gmm_flood
             }
-        self.signal = dists
+        if not upward:
+            self.signal_downward = dists
+        if upward:
+            self.signal_upward = dists
         return
 
     def update_joints_legacy(
@@ -703,11 +726,12 @@ class TrafficBayesNetwork:
 
         marginals_updated = copy.deepcopy(marginals)
         marginals_fixed = copy.deepcopy(marginals)
-        joints_updated = copy.deepcopy(joints)
+        joints_fixed = copy.deepcopy(joints)
+        updated_marginals = []
 
         signal_dict = {k: v for k, v in signal_dict.items() if v is not None}
         if not signal_dict:
-            return marginals_updated, joints_updated
+            return marginals_updated, joints_fixed
 
         # traverse the graph and record the parents affected by information propagation for each node
         reachable = defaultdict(list)  # records reachable parents by the information propagation
@@ -740,14 +764,14 @@ class TrafficBayesNetwork:
             visited.add(current_node)
 
             for child in self.network.successors(current_node):
-                assert child in joints_updated
+                assert child in joints_fixed
 
                 remaining_parents_n[child] -= 1
                 if remaining_parents_n[child] > 0:
                     continue  # not all reachable parents are ready
 
                 # update joints and marginals (backup, it can produce updated joints)
-                parent_ids, joint_gmm = joints_updated[child]['parents'], joints_updated[child]['joints']
+                parent_ids, joint_gmm = joints_fixed[child]['parents'], joints_fixed[child]['joints']
                 assert current_node in parent_ids
                 resampled_joint_samples = self.update_joints_multi_variable(
                     joint_gmm,
@@ -756,31 +780,17 @@ class TrafficBayesNetwork:
                     reachable[child], [child] + parent_ids,
                 )
 
-                # new_joint_gmm = self._optimal_gmm(resampled_joint_samples,)
-                # joints_updated[child] = {'parents': parent_ids, 'joints': new_joint_gmm}
-                # if verbose > 0:
-                #     print(f"Updated joint for {child} with parents {parent_ids}")
-
                 resampled_child_samples = resampled_joint_samples[:, [0]]
                 new_child_gmm = self._optimal_gmm(resampled_child_samples,)
                 marginals_updated[child] = new_child_gmm
-
-                # # fast algo
-                # new_joint_gmm = self.update_joints_multi_variable_backup(
-                #     joint_gmm,
-                #     [marginals_fixed[p] for p in reachable[child]],
-                #     [marginals_updated[p] for p in reachable[child]],
-                #     reachable[child], [child] + parent_ids,
-                # )
-                # new_child_gmm = marginalize_gmm(new_joint_gmm, 0)
-                # marginals_updated[child] = new_child_gmm
+                updated_marginals.append(child)
 
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
 
                 queue.append(child)
 
-        return marginals_updated, joints_updated
+        return marginals_updated, updated_marginals
 
     def update_network_with_multiple_soft_evidence_upward(
             self, signal_dict: dict, marginals, joints, verbose=1,
@@ -790,11 +800,12 @@ class TrafficBayesNetwork:
 
         marginals_updated = copy.deepcopy(marginals)
         marginals_fixed = copy.deepcopy(marginals)
-        joints_updated = copy.deepcopy(joints)
+        joints_fixed = copy.deepcopy(joints)
+        updated_marginals = []
 
         signal_dict = {k: v for k, v in signal_dict.items() if v is not None}
         if not signal_dict:
-            return marginals_updated, joints_updated
+            return marginals_updated, joints_fixed
 
         # traverse the graph and record the parents affected by information propagation for each node
         reachable = defaultdict(list)  # records reachable parents by the information propagation
@@ -827,7 +838,7 @@ class TrafficBayesNetwork:
             visited.add(current_node)
 
             for child in self.network.predecessors(current_node):
-                if child not in joints_updated:
+                if child not in joints_fixed:
                     continue  # in upward update, the top node has no parents
 
                 remaining_parents_n[child] -= 1
@@ -835,8 +846,8 @@ class TrafficBayesNetwork:
                     continue  # not all reachable parents are ready
 
                 # update joint
-                parent_ids = joints_updated[current_node]['parents']
-                joint_gmm = joints_updated[current_node]['joints']
+                parent_ids = joints_fixed[current_node]['parents']
+                joint_gmm = joints_fixed[current_node]['joints']
 
                 resampled_joint_samples = self.update_joints_multi_variable(
                     joint_gmm,
@@ -852,27 +863,41 @@ class TrafficBayesNetwork:
                     resampled_child_samples = resampled_joint_samples[:, [idx]]
                     new_child_gmm = self._optimal_gmm(resampled_child_samples)
                     marginals_updated[child] = new_child_gmm
+                    updated_marginals.append(child)
 
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
 
                 queue.append(child)
 
-        return marginals_updated, joints_updated
+        return marginals_updated, updated_marginals
 
     def update_network_with_multiple_soft_evidence(
-            self, signal_dict: dict, marginals_in, joints_in, verbose=1,
+            self, signals, marginals, joints, verbose=1,
     ):
-        marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_downward(
-            signal_dict, marginals_in, joints_in, verbose=verbose
+        signal_down = signals[0]
+        signal_up = signals[1]
+
+        marginal_down = marginals[0]
+        marginal_up = marginals[1]
+
+        marginals_down, updated_loc_down = self.update_network_with_multiple_soft_evidence_downward(
+            signal_down, marginal_down, joints, verbose=verbose
         )
-        # marginals_out, joints_out = self.update_network_with_multiple_soft_evidence_upward(
-        #     signal_dict, marginals_out, joints_out, verbose=verbose,
-        # )
+        marginals_up, updated_loc_up = self.update_network_with_multiple_soft_evidence_upward(
+            signal_up, marginal_up, joints, verbose=verbose,
+        )
+        # combine the updates on two directions
+        marginals = marginals_down.copy()
+        for l in updated_loc_up:
+            marginals[l] = marginals_up[l]
+        # marginals = marginals_up.copy()
+
         """
         A function is needed to handle the multi GMM not influenced by the propagation.
         """
-        return marginals_out, joints_out
+
+        return marginals, {'down': updated_loc_down, 'up': updated_loc_up}
 
     def calculate_gmm_entropy_approximation(self, gmm):
         samples, _ = gmm.sample(self.n_samples)
@@ -885,7 +910,7 @@ class TrafficBayesNetwork:
         # if the node has parents, joint and the marginal refitted from joint sampling was used
 
         if marginals is None:
-            marginals = self.marginals
+            marginals = self.marginals_downward
         if joints is None:
             joints = self.joints
 
@@ -950,16 +975,23 @@ class TrafficBayesNetwork:
         kl_div = np.mean(log_p - log_q)
         return kl_div
 
-    def calculate_network_conditional_kl_divergence(self, network_list, verbose=1, label=None):
+    def calculate_network_conditional_kl_divergence(self, network_list, update_loc, verbose=1, label=None):
         assert len(network_list), 'Divergence is between two networks'
         network_0, network_1 = network_list[0], network_list[1]
+        update_loc_0, update_loc_1 = update_loc[0], update_loc[1]
 
         divergence_0 = 0
-        for prior, posterior in zip(list(self.marginals.values()), list(network_0['marginals'].values())):
+        integrated_marginal_0 = self.marginals_downward.copy()
+        for l in update_loc_0['up']:  # updated by upward update
+            integrated_marginal_0[l] = self.marginals_upward[l]
+        for prior, posterior in zip(list(integrated_marginal_0.values()), list(network_0['marginals'].values())):
             divergence_0 += self.calculate_kl_divergence_gmm(posterior, prior)
 
         divergence_1 = 0
-        for prior, posterior in zip(list(self.marginals.values()), list(network_1['marginals'].values())):
+        integrated_marginal_1 = self.marginals_downward.copy()
+        for l in update_loc_1['up']:  # updated by upward update
+            integrated_marginal_1[l] = self.marginals_upward[l]
+        for prior, posterior in zip(list(integrated_marginal_1.values()), list(network_1['marginals'].values())):
             divergence_1 += self.calculate_kl_divergence_gmm(posterior, prior)
 
         divergence = divergence_0 * network_0['p'] + divergence_1 * network_1['p']
@@ -1013,12 +1045,12 @@ class TrafficBayesNetwork:
         return entropies
 
     def convert_state_to_dist(self, inferred_states):
-        inferred_states_filtered = {k: v for k, v in inferred_states.items() if k in list(self.signal.keys())}
+        inferred_states_filtered = {k: v for k, v in inferred_states.items() if k in list(self.signal_downward.keys())}
         signal = {
             k: (
-                self.signal[k]['speed_flood']
+                self.signal_downward[k]['speed_flood']
                 if v == 'flooded'
-                else self.signal[k]['speed_no_flood']
+                else self.signal_downward[k]['speed_no_flood']
                 if v == 'not flooded'
                 else None
             )
@@ -1060,17 +1092,26 @@ class TrafficBayesNetwork:
         assert mentioned_nodes == set(self.network.nodes), "Mentioned nodes must equal graph nodes"
 
         # check marginals and joints/network
-        common_keys = set(self.network.nodes()) & set(self.marginals.keys())
-        self.marginals = {k: v for k, v in self.marginals.items() if k in common_keys}
+        common_keys = set(self.network.nodes()) & set(self.marginals_downward.keys())
+        self.marginals_downward = {k: v for k, v in self.marginals_downward.items() if k in common_keys}
+
+        common_keys = set(self.network.nodes()) & set(self.marginals_upward.keys())
+        self.marginals_upward = {k: v for k, v in self.marginals_upward.items() if k in common_keys}
 
         # check signals and joints/network
-        self.signal = {
-            k: v for k, v in self.signal.items()
+        self.signal_downward = {
+            k: v for k, v in self.signal_downward.items()
             if v['speed_no_flood'] is not None and v['speed_flood'] is not None
         }
-        common_keys = set(self.network.nodes()) & set(self.signal.keys())
-        self.signal = {k: v for k, v in self.signal.items() if k in common_keys}
+        common_keys = set(self.network.nodes()) & set(self.signal_downward.keys())
+        self.signal_downward = {k: v for k, v in self.signal_downward.items() if k in common_keys}
 
+        self.signal_upward = {
+            k: v for k, v in self.signal_upward.items()
+            if v['speed_no_flood'] is not None and v['speed_flood'] is not None
+        }
+        common_keys = set(self.network.nodes()) & set(self.signal_upward.keys())
+        self.signal_upward = {k: v for k, v in self.signal_upward.items() if k in common_keys}
 
 class FloodBayesNetwork:
     def __init__(self, t_window: str = 'D'):
