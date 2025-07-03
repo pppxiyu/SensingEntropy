@@ -458,8 +458,20 @@ class TrafficBayesNetwork:
         self.joints = dependency_gmms
         return
 
-    def fit_signal(self, segment_flood_time, flood_prob, mode='from_marginal', verbose=0, upward=False):
+    def fit_signal(
+            self, segment_flood_time, flood_prob,
+            mode='from_marginal', verbose=0, upward=False, signal_filter=.035
+    ):
         import warnings
+
+        def get_gmm(df):
+            if (len(df)) > 50 and (df.sum() != 0):
+                gmm = self._optimal_gmm(df.values.reshape(-1, 1), )
+            else:
+                gmm = None
+                if verbose > 0:
+                    warnings.warn(f'Sample size is too small. Skipped.')
+            return gmm
 
         assert mode in ['from_marginal', 'from_data']
         speed = self.speed_data.copy()
@@ -479,9 +491,35 @@ class TrafficBayesNetwork:
 
             flood_events = segment_flood_time[link_id]
             speed_data['flooded'] = False
+            event_wise_dist = []
+            speed_data_original = speed_data.copy()
             for _, event in flood_events.iterrows():
                 mask = (speed_data['time'] >= event['buffer_start']) & (speed_data['time'] <= event['buffer_end'])
                 speed_data.loc[mask, 'flooded'] = True
+                if signal_filter is not None:
+                    speed_data_original.loc[mask, 'flooded'] = True
+                    d = speed_data_original[speed_data_original['flooded']]['speed']
+                    dist = get_gmm(d)
+                    event_wise_dist.append(dist)
+
+            if signal_filter is not None:
+                from itertools import combinations
+                dist_list = []
+                if len(event_wise_dist) == 1:
+                    dist_list.append(0)
+                for gmm_a, gmm_b in combinations(event_wise_dist, 2):
+                    if gmm_a is None or gmm_b is None:
+                        dist_list.append(0)
+                    else:
+                        dist_list.append(calculate_kl_divergence_gmm(gmm_a, gmm_b))
+                ave_dist = sum(dist_list) / len(dist_list)
+                if ave_dist > signal_filter:
+                    dists[link_id] = {
+                        'p_flood': p_flood,
+                        'speed_no_flood': None,
+                        'speed_flood': None
+                    }
+                    continue
 
             speed_no_flood, speed_flood = None, None
             if mode == 'from_data':
@@ -500,15 +538,6 @@ class TrafficBayesNetwork:
                 samples = np.sort(samples, axis=0)
                 speed_flood = pd.Series(samples[speed_data['flooded'].to_numpy()][:, 0])
                 speed_no_flood = pd.Series(samples[~speed_data['flooded'].to_numpy()][:, 0])
-
-            def get_gmm(df):
-                if (len(df)) > 50 and (df.sum() != 0):
-                    gmm = self._optimal_gmm(df.values.reshape(-1, 1),)
-                else:
-                    gmm = None
-                    if verbose > 0:
-                        warnings.warn(f'Sample size is too small. Skipped.')
-                return gmm
 
             gmm_no_flood = get_gmm(speed_no_flood)
             gmm_flood = get_gmm(speed_flood)
@@ -756,6 +785,7 @@ class TrafficBayesNetwork:
         visited = set()
         for n, gmm in signal_dict.items():
             marginals_updated[n] = gmm
+            updated_marginals.append(n)
 
         while queue:
             current_node = queue.popleft()
@@ -873,7 +903,7 @@ class TrafficBayesNetwork:
         return marginals_updated, updated_marginals
 
     def update_network_with_multiple_soft_evidence(
-            self, signals, marginals, joints, verbose=1,
+            self, signals: list, marginals, joints, verbose=1,
     ):
         signal_down = signals[0]
         signal_up = signals[1]
@@ -967,14 +997,6 @@ class TrafficBayesNetwork:
                 print(f"Total Entropy of the Bayesian Network: {entropy}")
         return entropy
 
-    @staticmethod
-    def calculate_kl_divergence_gmm(P_gmm, Q_gmm, n_samples=10000):
-        X_samples, _ = P_gmm.sample(n_samples)
-        log_p = P_gmm.score_samples(X_samples)
-        log_q = Q_gmm.score_samples(X_samples)
-        kl_div = np.mean(log_p - log_q)
-        return kl_div
-
     def calculate_network_conditional_kl_divergence(self, network_list, update_loc, verbose=1, label=None):
         assert len(network_list), 'Divergence is between two networks'
         network_0, network_1 = network_list[0], network_list[1]
@@ -982,17 +1004,17 @@ class TrafficBayesNetwork:
 
         divergence_0 = 0
         integrated_marginal_0 = self.marginals_downward.copy()
-        for l in update_loc_0['up']:  # updated by upward update
+        for l in update_loc_0['up']:  # loc updated by upward update
             integrated_marginal_0[l] = self.marginals_upward[l]
         for prior, posterior in zip(list(integrated_marginal_0.values()), list(network_0['marginals'].values())):
-            divergence_0 += self.calculate_kl_divergence_gmm(posterior, prior)
+            divergence_0 += calculate_kl_divergence_gmm(posterior, prior)
 
         divergence_1 = 0
         integrated_marginal_1 = self.marginals_downward.copy()
-        for l in update_loc_1['up']:  # updated by upward update
+        for l in update_loc_1['up']:  # loc updated by upward update
             integrated_marginal_1[l] = self.marginals_upward[l]
         for prior, posterior in zip(list(integrated_marginal_1.values()), list(network_1['marginals'].values())):
-            divergence_1 += self.calculate_kl_divergence_gmm(posterior, prior)
+            divergence_1 += calculate_kl_divergence_gmm(posterior, prior)
 
         divergence = divergence_0 * network_0['p'] + divergence_1 * network_1['p']
         if verbose > 0:
@@ -1004,12 +1026,12 @@ class TrafficBayesNetwork:
 
     def calculate_network_kl_divergence(self, network_list, verbose=1, label=None):
         assert len(network_list), 'Divergence is between two networks'
-        network_0, network_1 = network_list[0], network_list[1]
+        network_0, network_1 = network_list[0], network_list[1]  # estimate, ground truth
         common_keys = network_0.keys() & network_1.keys()
 
         divergence = 0
         for k in common_keys:
-            divergence += self.calculate_kl_divergence_gmm(network_0[k], network_1[k])
+            divergence += calculate_kl_divergence_gmm(network_0[k], network_1[k])
 
         if verbose > 0:
             if label is not None:
@@ -1046,7 +1068,7 @@ class TrafficBayesNetwork:
 
     def convert_state_to_dist(self, inferred_states):
         inferred_states_filtered = {k: v for k, v in inferred_states.items() if k in list(self.signal_downward.keys())}
-        signal = {
+        signal_down = {
             k: (
                 self.signal_downward[k]['speed_flood']
                 if v == 'flooded'
@@ -1056,7 +1078,17 @@ class TrafficBayesNetwork:
             )
             for k, v in inferred_states_filtered.items()
         }
-        return signal
+        signal_up = {
+            k: (
+                self.signal_downward[k]['speed_flood']
+                if v == 'flooded'
+                else self.signal_downward[k]['speed_no_flood']
+                if v == 'not flooded'
+                else None
+            )
+            for k, v in inferred_states_filtered.items()
+        }
+        return [signal_down, signal_up]
 
     def save_instance(self, file):
         import pickle
@@ -1511,6 +1543,13 @@ class MultiGaussianMixture:
         log_total_density = np.log(total_density)
         return log_total_density
 
+
+def calculate_kl_divergence_gmm(P_gmm, Q_gmm, n_samples=10000):
+    X_samples, _ = P_gmm.sample(n_samples)
+    log_p = P_gmm.score_samples(X_samples)
+    log_q = Q_gmm.score_samples(X_samples)
+    kl_div = np.mean(log_p - log_q)
+    return kl_div
 
 def marginalize_gmm(gmm, var_idx):
     # part of the quick algo

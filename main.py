@@ -8,13 +8,15 @@ import visualization as vis
 import random
 import numpy as np
 
-random.seed(0)
-np.random.seed(0)
-df_random_seed = 0
-
 import pickle
 import os
 import warnings
+
+random.seed(0)
+np.random.seed(0)
+df_random_seed = 0
+os.environ['PYTHONHASHSEED'] = str(0)
+
 
 """
 Load cache
@@ -101,10 +103,12 @@ if not load_t:
 
     # Fit signals
     bayes_network_t.fit_signal(
-        road_data.flood_time_per_road, bayes_network_f.marginals, mode='from_marginal', upward=False
+        road_data.flood_time_per_road, bayes_network_f.marginals,
+        mode='from_marginal', upward=False, signal_filter=.03
     )
     bayes_network_t.fit_signal(
-        road_data.flood_time_per_road, bayes_network_f.marginals, mode='from_marginal', upward=True
+        road_data.flood_time_per_road, bayes_network_f.marginals,
+        mode='from_marginal', upward=True, signal_filter=.03
     )
     # for k, v in bayes_network_t.signal_downward.items():
     #     print(f'Distributions under observations at {k}')
@@ -115,69 +119,78 @@ if not load_t:
 # mo.check_gmr_bn_consistency(list(bayes_network_t.marginals.keys()), bayes_network_t.joints)
 
 """
-Incident-wise validation
+Validation
 """
-# kld = []
-# rd_test = dd.RoadData()
-# for i in road_data.flood_time_citywide.copy().drop(
-#         road_data.flood_time_citywide.copy().sample(frac=0, random_state=df_random_seed).index
-# ).index:
-#     # get incident data and ground truth
-#     d = rd_test.pull_nyc_dot_traffic_flooding(
-#         dir_NYC_data_token,
-#         select_incidents=road_data.flood_time_citywide.copy().iloc[[i]]
-#     )
-#     if d is None:
-#         continue
-#     rd_test.resample_nyc_dot_traffic(rd_test.speed)
-#     bn_t_test = mo.TrafficBayesNetwork(
-#         speed=rd_test.speed_resampled, road_geo=road_data.geo, network_mode='causal',
-#         n_samples=10000, n_components=12, fitting_mode='one-off',
-#         remove_nodes=remove_data_from_nodes,
-#     )
-#     bn_t_test.fit_joint()
-#     bn_t_test.fit_marginal_from_joints()
-#
-#     bn_t_test.fit_signal(road_data.flood_time_per_road, bayes_network_f.marginals, mode='from_marginal')
-#
-#     # make estimate
-#     historical = bayes_network_t.calculate_network_kl_divergence([
-#         bayes_network_t.marginals,  # historical
-#         bn_t_test.marginals,  # ground truth
-#     ])
-#     estimate = historical
-#     sensing = rd_test.get_flooded_roads_during_inct(
-#         road_data.flood_time_per_road, road_data.flood_time_citywide.copy().iloc[[i]]
-#     )
-#     for r in sensing:
-#         if r not in bayes_network_t.signal_downward:
-#             continue
-#         inferred_signals_flood = bayes_network_t.convert_state_to_dist(
-#             bayes_network_f.infer_node_states(r, 1, 1, 1)
-#         )
-#
-#         # vis.dist_gmm_1d(bayes_network_t.marginals[r])  # historical
-#         # if r in bn_t_test.marginals:
-#         #     vis.dist_gmm_1d(bn_t_test.marginals[r])  # incident
-#         # vis.dist_gmm_1d({**{r: bayes_network_t.signal_downward[r]['speed_flood']}, **inferred_signals_flood}[r])  # signal_downward
-#
-#         marginals_flood, joints_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
-#             {**{r:  bn_t_test.signal_downward[r]['speed_flood']}, **inferred_signals_flood},
-#             bayes_network_t.marginals.copy(), bayes_network_t.joints.copy(), verbose=0
-#         )
-#         estimate = bayes_network_t.calculate_network_kl_divergence([
-#             marginals_flood,  # estimate
-#             bn_t_test.marginals,  # ground truth
-#         ])
-#     kld.append([historical, estimate])
-# relative_changes = [(e1 - e2) / e1 if e1 != 0 else 0 for e1, e2 in kld]
-# print([i for i in relative_changes if abs(i) > 0.01])
+kld = []
+rd_test = dd.RoadData()
+for i in road_data.flood_time_citywide.copy().drop(
+        road_data.flood_time_citywide.copy().sample(frac=0, random_state=df_random_seed).index
+).index:
 
-"""
-Incident-wise validation
-"""
+    # check if signals are available
+    sensing = rd_test.get_flooded_roads_during_inct(
+        road_data.flood_time_per_road, road_data.flood_time_citywide.copy().iloc[[i]]
+    )
+    available = False
+    for r in sensing:
+        if r in bayes_network_t.signal_downward:
+            available = True
+            break
+    if not available:
+        continue
 
+    # get incident data and ground truth
+    d = rd_test.pull_nyc_dot_traffic_flooding(
+        dir_NYC_data_token,
+        select_incidents=road_data.flood_time_citywide.copy().iloc[[i]]
+    )
+    if d is None:
+        continue
+    rd_test.resample_nyc_dot_traffic(rd_test.speed)
+    bn_t_test = mo.TrafficBayesNetwork(
+        speed=rd_test.speed_resampled, road_geo=road_data.geo, network_mode='causal',
+        n_samples=10000, n_components=12, fitting_mode='one-off',
+        remove_nodes=remove_data_from_nodes,
+    )
+    bn_t_test.fit_joint()
+    bn_t_test.fit_marginal_from_joints()
 
+    # make estimate
+    signals = [r for r in sensing if r in bayes_network_t.signal_downward]
+    infer_signal = [
+        bayes_network_t.convert_state_to_dist(
+            bayes_network_f.infer_node_states(s, 1, 1, 1)
+        ) for s in signals
+    ]
+    marginals_flood, update_loc_f = bayes_network_t.update_network_with_multiple_soft_evidence(
+        [
+            {**{k: bayes_network_t.signal_downward[k]['speed_flood'] for k in signals},
+             **{k: v for i in infer_signal if i[0] != {} for k, v in i[0].items()}},
+            {**{k: bayes_network_t.signal_upward[k]['speed_flood'] for k in signals},
+             **{k: v for i in infer_signal if i[1] != {} for k, v in i[1].items()}},
+        ],
+        [
+            bayes_network_t.marginals_downward.copy(),
+            bayes_network_t.marginals_upward.copy()
+        ],
+        bayes_network_t.joints.copy(),
+        verbose=0
+    )
+
+    # eval
+    update_locs = update_loc_f['down'] + update_loc_f['up']
+    print(update_locs)
+    estimated = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
+        {k: v for k, v in bn_t_test.marginals_downward.items() if k in update_locs},  # ground truth
+    ])
+    historical = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # historical
+        {k: v for k, v in bn_t_test.marginals_downward.items() if k in update_locs},  # ground truth
+    ])
+
+    kld.append([historical, estimated])
+relative_changes = [(e1 - e2) / e1 if e1 != 0 else 0 for e1, e2 in kld]
 
 """
 Inference and placement
@@ -203,8 +216,8 @@ for n in range(sensor_count):
             )
             marginals_no_flood, update_loc_nf = bayes_network_t.update_network_with_multiple_soft_evidence(
                 [
-                    {**{k: v['speed_no_flood']}, **inferred_signals_no_flood},
-                    {**{k: bayes_network_t.signal_upward[k]['speed_no_flood']}, **inferred_signals_no_flood},
+                    {**{k: v['speed_no_flood']}, **inferred_signals_no_flood[0]},
+                    {**{k: bayes_network_t.signal_upward[k]['speed_no_flood']}, **inferred_signals_no_flood[1]},
                 ],
                 [
                     bayes_network_t.marginals_downward.copy(),
@@ -215,8 +228,8 @@ for n in range(sensor_count):
             )
             marginals_flood, update_loc_f = bayes_network_t.update_network_with_multiple_soft_evidence(
                 [
-                    {**{k: v['speed_flood']}, **inferred_signals_flood},
-                    {**{k: bayes_network_t.signal_upward[k]['speed_flood']}, **inferred_signals_no_flood},
+                    {**{k: v['speed_flood']}, **inferred_signals_flood[0]},
+                    {**{k: bayes_network_t.signal_upward[k]['speed_flood']}, **inferred_signals_flood[1]},
                 ],
                 [
                     bayes_network_t.marginals_downward.copy(),
