@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -506,7 +508,14 @@ class TrafficBayesNetwork:
                 from itertools import combinations
                 dist_list = []
                 if len(event_wise_dist) == 1:
-                    dist_list.append(0)
+                    # dist_list.append(0)
+                    dists[link_id] = {
+                        'p_flood': p_flood,
+                        'speed_no_flood': None,
+                        'speed_flood': None
+                    }
+                    continue
+
                 for gmm_a, gmm_b in combinations(event_wise_dist, 2):
                     if gmm_a is None or gmm_b is None:
                         dist_list.append(0)
@@ -1030,8 +1039,14 @@ class TrafficBayesNetwork:
         common_keys = network_0.keys() & network_1.keys()
 
         divergence = 0
+        computed = False
         for k in common_keys:
             divergence += calculate_kl_divergence_gmm(network_0[k], network_1[k])
+            computed = True
+
+        if not computed:
+            warnings.warn('No KL divergence is computed.')
+            return None
 
         if verbose > 0:
             if label is not None:
