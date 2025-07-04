@@ -1,6 +1,7 @@
 import data as dd
 import model as mo
 from config import *
+import visualization as vis
 
 import random
 random.seed(0)
@@ -24,17 +25,28 @@ for i in road_data.flood_time_citywide.copy().drop(
         road_data.flood_time_citywide.copy().sample(frac=0, random_state=df_random_seed).index
 ).index:
 
-    # check if signals are available
-    sensing = rd_test.get_flooded_roads_during_inct(
+    # check if signals for the inundation are available
+    inundation = rd_test.get_flooded_roads_during_inct(
         road_data.flood_time_per_road, road_data.flood_time_citywide.copy().iloc[[i]]
     )
     available = False
-    for r in sensing:
+    for r in inundation:
         if r in bayes_network_t.signal_downward:
             available = True
             break
     if not available:
         continue
+
+    """
+    temporary codes (for locate the bad inference)
+    Signals 4456494 abd 4616272 appears 4 time separately and fails 1 time out of the 4. The reason of failure 
+    is that the signal from historical average is too different from the distribution of the specific incident.
+    Signal 4620343 appears once and failed. The reason is that the dependency based on all data does not 
+    work for the specific incidents.
+    """
+    # signals = [r for r in inundation if r in bayes_network_t.signal_downward]
+    # if not any(elem in signals for elem in ['4620343']):
+    #     continue
 
     # get incident data and ground truth
     d = rd_test.pull_nyc_dot_traffic_flooding(
@@ -53,7 +65,7 @@ for i in road_data.flood_time_citywide.copy().drop(
     bn_t_test.fit_marginal_from_joints()
 
     # make estimate
-    signals = [r for r in sensing if r in bayes_network_t.signal_downward]
+    signals = [r for r in inundation if r in bayes_network_t.signal_downward]
     infer_signal = [
         bayes_network_t.convert_state_to_dist(
             bayes_network_f.infer_node_states(s, 1, 1, 1)

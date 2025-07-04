@@ -4,10 +4,12 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
+
 from sklearn.mixture import GaussianMixture
 import visualization as vis
 import networkx as nx
+
+os.environ["OMP_NUM_THREADS"] = "1"
 
 
 class TrafficBayesNetwork:
@@ -1033,7 +1035,8 @@ class TrafficBayesNetwork:
                 print(f"KL divergencey of the two Bayesian Network: {divergence}")
         return divergence
 
-    def calculate_network_kl_divergence(self, network_list, verbose=1, label=None):
+    @staticmethod
+    def calculate_network_kl_divergence(network_list, verbose=1, label=None):
         assert len(network_list), 'Divergence is between two networks'
         network_0, network_1 = network_list[0], network_list[1]  # estimate, ground truth
         common_keys = network_0.keys() & network_1.keys()
