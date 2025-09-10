@@ -30,16 +30,16 @@ class RoadData:
             print(
                 'Unreadable roads by polyline package. '
                 'Manually check it at https://developers.google.com/maps/documentation/utilities/polylineutility'
-                'and save it in ./data/unreadable_NYC_roads.csv'
+                'and save it in ./cache/unreadable_nyc_roads.csv'
             )
-            unreadable = pd.read_csv('./data/unreadable_NYC_roads.csv', dtype=str, delimiter=';', index_col=None)
+            unreadable = pd.read_csv('cache/unreadable_nyc_roads.csv', dtype=str, delimiter=';', index_col=None)
             if string.encode('unicode_escape').decode() in unreadable['encoded_polyline'].values:
                 points = unreadable.loc[
                     unreadable['encoded_polyline'] == string.encode('unicode_escape').decode(), 'points'
                 ].values[0]
                 points = re.sub(r'\)\(', '), (', points)
                 points = ast.literal_eval(points)
-                print('Read from ./data/unreadable_NYC_roads.csv')
+                print('Read from ./cache/unreadable_nyc_roads.csv')
                 return LineString([(i[1], i[0]) for i in points])
             return None
 
@@ -471,4 +471,6 @@ def merge_road_speed_geo(road_speed, road_geo):
 
 
 
+if __name__ == '__main__':
+    pass
 

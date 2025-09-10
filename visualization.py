@@ -111,7 +111,7 @@ def map_roads_n_flood_plt(geo_roads, geo_flood, buffer=25):
 
 
 def map_roads_n_flood_plotly(geo_roads, geo_flood, buffer=25, mapbox_token=None, save_dir='', shift=True):
-    assert mapbox_token is not None, 'Missing mapbox token.'
+    assert mapbox_token is not None, 'Missing mapbox mb_token.'
     from shapely.ops import unary_union
     geo_flood_filtered = geo_flood[geo_flood.geometry.within(unary_union(geo_roads.buffer(buffer).geometry))]
     geo_flood_filtered = geo_flood_filtered.to_crs(epsg=4326)
@@ -148,6 +148,98 @@ def map_roads_n_flood_plotly(geo_roads, geo_flood, buffer=25, mapbox_token=None,
     )
     fig.show(renderer="browser")
     # fig.write_html(f'{save_dir}/dist_rc_error.html')
+    # io.write_image(fig, f'{save_dir}/dist_rc_error.png', scale=4)
+    return
+
+
+def map_roads_plotly(geo_roads, mapbox_token=None, save_dir='',):
+    assert mapbox_token is not None, 'Missing mapbox mb_token.'
+    geo_roads = geo_roads.to_crs(epsg=4326)
+
+    line_traces = []
+    legend_added = set()
+    for _, row in geo_roads.iterrows():
+
+        if row.geometry.geom_type == 'LineString':
+            linestrings = [row.geometry]
+        else:
+            linestrings = list(row.geometry.geoms)
+
+        for linestring in linestrings:
+            line_coords = list(linestring.coords)
+            lons, lats = zip(*line_coords)
+
+            p_value = row['p']
+            if p_value == 'Reported':
+                color = "#DE3163"
+                display_p = "Reported"
+                legend_name = "Reported"
+                legend_group = "Reported"
+            elif p_value == 'Unknown':
+                color = "#808080"
+                display_p = "Unknown"
+                legend_name = "Unknown"
+                legend_group = "Unknown"
+            elif p_value >= 0.666666:
+                color = "red"
+                display_p = f"{p_value:.3f}"
+                legend_name = "High Risk (p ≥ 0.667)"
+                legend_group = "high"
+            elif p_value >= 0.333333:
+                color = "orange"
+                display_p = f"{p_value:.3f}"
+                legend_name = "Medium Risk (0.333 ≤ p < 0.667)"
+                legend_group = "medium"
+            else:
+                color = "yellow"
+                display_p = f"{p_value:.3f}"
+                legend_name = "Low Risk (p < 0.333)"
+                legend_group = "low"
+
+            show_legend = legend_group not in legend_added
+            if show_legend:
+                legend_added.add(legend_group)
+
+            line_traces.append(
+                go.Scattermapbox(
+                    lon=lons,
+                    lat=lats,
+                    mode="lines",
+                    line=dict(width=3, color=color),
+                    # name=f"{row['STREET']} (p={display_p})",
+                    name=legend_name,
+                    legendgroup=legend_group,
+                    showlegend=show_legend,
+                    hovertemplate=f"<b>{row['STREET']}</b><br>Probability: {display_p}<extra></extra>",
+                )
+            )
+
+    fig = go.Figure(line_traces)
+    fig.update_layout(
+        width=2000,
+        height=800,
+        mapbox=dict(
+            accesstoken=mapbox_token, style="dark", center=dict(lat=32.79, lon=-79.94), zoom=13.5,
+        ),
+        margin={"r": 0, "t": 0, "l": 0, "b": 0},
+        showlegend=True,
+        dragmode='pan',
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="rgba(0,0,0,0.2)",
+            borderwidth=1,
+            font=dict(size=20)
+        ),
+    )
+
+    fig.show(renderer="browser",)
+    fig.write_image("map_plot.pdf",)
+    # fig.write_html('bn_outputs.html')
+    # fig.write_html(f'{save_dir}/bn_outputs.html')
     # io.write_image(fig, f'{save_dir}/dist_rc_error.png', scale=4)
     return
 

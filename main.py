@@ -20,11 +20,11 @@ os.environ['PYTHONHASHSEED'] = str(0)
 Load cache
 """
 road_data = dd.RoadData()
-load_r = road_data.load_instance('./cache/classes/road_data')
+load_r = road_data.load_instance('./cache/instances/road_data')
 bayes_network_f = mo.FloodBayesNetwork()
-load_f = bayes_network_f.load_instance('./cache/classes/bayes_network_f')
+load_f = bayes_network_f.load_instance('./cache/instances/bayes_network_f')
 bayes_network_t = mo.TrafficBayesNetwork()
-load_t = bayes_network_t.load_instance('./cache/classes/bayes_network_t')
+load_t = bayes_network_t.load_instance('./cache/instances/bayes_network_t')
 
 if not load_r:
     """
@@ -51,7 +51,7 @@ if not load_r:
     )
     road_data.resample_nyc_dot_traffic(road_data.speed)
 
-    road_data.save_instance('./cache/classes/road_data')
+    road_data.save_instance('./cache/instances/road_data')
 
 if not load_f:
     """
@@ -67,7 +67,7 @@ if not load_f:
     bayes_network_f.fit_conditional(road_data.closures)
     bayes_network_f.build_bayes_network()
 
-    bayes_network_f.save_instance('./cache/classes/bayes_network_f')
+    bayes_network_f.save_instance('./cache/instances/bayes_network_f')
 
 if not load_t:
     # Init
@@ -113,7 +113,7 @@ if not load_t:
     #     vis.dist_discrete_gmm(v, bayes_network_t.marginals[k],)  # FIGURE 3: distribution with observation
 
     bayes_network_t.organize_keys()
-    bayes_network_t.save_instance('./cache/classes/bayes_network_t')
+    bayes_network_t.save_instance('./cache/instances/bayes_network_t')
 # mo.check_gmr_bn_consistency(list(bayes_network_t.marginals.keys()), bayes_network_t.joints)
 
 """

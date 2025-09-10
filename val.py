@@ -13,11 +13,11 @@ os.environ['PYTHONHASHSEED'] = str(0)
 
 
 road_data = dd.RoadData()
-load_r = road_data.load_instance('./cache/classes/road_data')
+load_r = road_data.load_instance('./cache/instances/road_data')
 bayes_network_f = mo.FloodBayesNetwork()
-load_f = bayes_network_f.load_instance('./cache/classes/bayes_network_f')
+load_f = bayes_network_f.load_instance('./cache/instances/bayes_network_f')
 bayes_network_t = mo.TrafficBayesNetwork()
-load_t = bayes_network_t.load_instance('./cache/classes/bayes_network_t')
+load_t = bayes_network_t.load_instance('./cache/instances/bayes_network_t')
 
 kld = []
 rd_test = dd.RoadData()
