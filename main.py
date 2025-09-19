@@ -32,7 +32,9 @@ if not load_r:
     """
     # Geometry manual processing
     road_data = dd.RoadData()
-    road_data.pull_nyc_dot_traffic(dir_NYC_data_token, ['2020-04-01', '2020-04-30'], True)
+    # road_data.pull_nyc_dot_traffic(
+    #     dir_NYC_data_token, ['2020-04-01', '2020-04-30'], True
+    # )  # road geometries have been downloaded, checked, and corrected. Comment this line.
     road_data.import_adapted_nyc_road(dir_adapted_nyc_roads)
 
     # Identify flooding periods from df

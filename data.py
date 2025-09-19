@@ -5,7 +5,7 @@ import visualization as vis
 
 class RoadData:
     def __init__(self):
-        self.geo = None
+        self.geo = None  # geometry of roads
         self.speed = None
         self.speed_resampled = None
         self.closures = None
@@ -156,6 +156,7 @@ class RoadData:
         gdf = gpd.GeoDataFrame(gdf, geometry='geometry').set_crs('4326')
         gdf = gdf[['id', 'geometry', 'time_create',]]
 
+        # filter closure using the buffer zones of roads
         road_geo = self.geo.to_crs(crs).copy()
         road_geo_buffer = road_geo.copy()
         road_geo_buffer.geometry = road_geo_buffer.buffer(buffer)
@@ -469,6 +470,14 @@ def merge_road_speed_geo(road_speed, road_geo):
     road_speed = gpd.GeoDataFrame(road_speed, geometry='geometry').set_crs(epsg=4326)
     return road_speed
 
+
+def get_period_before_start(ict: pd.DataFrame, pre_period_days=7):
+
+    pre_incident = ict.copy()
+    pre_incident['buffer_end'] = pre_incident['buffer_start']
+    pre_incident['buffer_start'] = pre_incident['buffer_start'] - pd.Timedelta(days=pre_period_days)
+
+    return pre_incident
 
 
 if __name__ == '__main__':

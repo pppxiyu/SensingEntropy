@@ -1168,7 +1168,7 @@ class FloodBayesNetwork:
         """
         :param t_window: the unit for processing flood data, default is day
         """
-        self.t_window = t_window
+        self.t_window = t_window  # time window to locate a flooding
         self.network = None
         self.marginals = None
         self.conditionals = None
@@ -1239,7 +1239,7 @@ class FloodBayesNetwork:
             graph.nodes[node]['occurrence'] = occurrence[node]
         for (a, b), count in co_occurrence.items():
             if count >= edge_thr:
-                prob = count / occurrence[a]
+                prob = count / occurrence[a]  # if occurrence / co-occurrence is over the thr, there is an edge
                 graph.add_edge(a, b, weight=prob)
 
         graph, _ = self.remove_min_weight_feedback_arcs(graph)
@@ -1457,6 +1457,14 @@ class FloodBayesNetwork:
         return graph, removed_edges
 
     def process_raw_flood_data(self, df: pd.DataFrame):
+        """
+        Calculate the flood incidents time bin, the occurrence of the flooding on each segment,
+        and the co-occurrence count
+        :param df: flood induced road closure datasets
+        :return: df, the flooded roads in each incident
+                dict, the flood count for roads
+                dict the co-occurrence count for each pair
+        """
         from pandas.api.types import is_datetime64_ns_dtype
         from pandas.api.types import is_string_dtype
         from collections import defaultdict

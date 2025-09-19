@@ -19,6 +19,8 @@ load_f = bayes_network_f.load_instance('./cache/instances/bayes_network_f')
 bayes_network_t = mo.TrafficBayesNetwork()
 load_t = bayes_network_t.load_instance('./cache/instances/bayes_network_t')
 
+
+# validate on each incident
 kld = []
 rd_test = dd.RoadData()
 for i in road_data.flood_time_citywide.copy().drop(
@@ -86,6 +88,27 @@ for i in road_data.flood_time_citywide.copy().drop(
         verbose=0
     )
 
+    # fit the marginal at normal time
+    rd_normal = dd.RoadData()
+    p = dd.get_period_before_start(road_data.flood_time_citywide.copy().iloc[[i]], 7)
+    for i in range(10):
+        d_normal = rd_normal.pull_nyc_dot_traffic_flooding(dir_NYC_data_token, select_incidents=p)
+        if (d_normal is not None) and (len(d_normal) > 1000):
+            break
+        p = dd.get_period_before_start(p, 7)
+    bayes_network_normal = None
+    if (d_normal is not None) and (len(d_normal) > 1000):
+        rd_normal.resample_nyc_dot_traffic(rd_normal.speed)
+        bayes_network_normal = mo.TrafficBayesNetwork(
+            speed=rd_normal.speed_resampled, road_geo=road_data.geo, network_mode='causal',
+            n_samples=10000, n_components=12, fitting_mode='one-off',
+            remove_nodes=remove_data_from_nodes,
+        )
+        bayes_network_normal.fit_joint()
+        # bayes_network_normal.fit_marginal_from_data()
+        bayes_network_normal.fit_marginal_from_joints(upward=False)
+
+
     # eval
     print(f'Signal locs: {signals}')
     update_locs = update_loc_f['down'] + update_loc_f['up']
@@ -94,11 +117,16 @@ for i in road_data.flood_time_citywide.copy().drop(
         {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
         {k: v for k, v in bn_t_test.marginals_downward.items() if k in update_locs},  # ground truth
     ])
-    historical = bayes_network_t.calculate_network_kl_divergence([
-        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # historical
-        {k: v for k, v in bn_t_test.marginals_downward.items() if k in update_locs},  # ground truth
-    ])
-
+    if bayes_network_normal is None:
+        historical = bayes_network_t.calculate_network_kl_divergence([
+            {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # historicall normal period
+            {k: v for k, v in bn_t_test.marginals_downward.items() if k in update_locs},  # ground truth
+        ])
+    else:
+        historical = bayes_network_t.calculate_network_kl_divergence([
+            {k: v for k, v in bayes_network_normal.marginals.items() if k in update_locs},  # historicall normal period
+            {k: v for k, v in bn_t_test.marginals_downward.items() if k in update_locs},  # ground truth
+        ])
     kld.append([historical, estimated])
 kld = [i for i in kld if i[0] is not None]
 relative_changes = [(e1 - e2) / e1 if e1 != 0 else 0 for e1, e2 in kld]
