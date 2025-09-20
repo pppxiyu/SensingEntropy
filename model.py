@@ -1501,9 +1501,11 @@ class FloodBayesNetwork:
         try:
             import pickle
             from pathlib import Path
+            import joblib
             file = Path(file)
-            with file.open("rb") as f:
-                loaded = pickle.load(f)
+            loaded = joblib.load(file)
+            # with file.open("rb") as f:
+            #     loaded = pickle.load(f)
             self.__dict__.clear()
             self.__dict__.update(loaded.__dict__)
             print('Flood Bayesian Network exists')
