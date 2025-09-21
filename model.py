@@ -1,15 +1,15 @@
 import warnings
 
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import os
 
 from sklearn.mixture import GaussianMixture
 import visualization as vis
 import networkx as nx
-
-os.environ["OMP_NUM_THREADS"] = "1"
 
 
 class TrafficBayesNetwork:
@@ -18,7 +18,7 @@ class TrafficBayesNetwork:
             speed: pd.DataFrame = None, road_geo: gpd.GeoDataFrame = None,
             n_samples: int = None, n_components: int = None,
             network_mode: str = 'causal', fitting_mode: str = 'one-off',
-            remove_nodes: list = None,
+            remove_nodes: list = None, corr_thr: float = None, network_ready=None,
     ):
         """
         network_mode: it specifies the direction of edges in the network. "causal" means the arrow points
@@ -46,7 +46,12 @@ class TrafficBayesNetwork:
         self.fitting_mode = fitting_mode
 
         if speed is not None and road_geo is not None:
-            self.network = self.build_network_from_geo(road_geo, remove_no_data_segment=speed)
+            if network_ready is None:
+                self.network = self.build_network_from_geo(
+                    road_geo, remove_no_data_segment=speed, correlation_threshold=corr_thr, speed_df=speed
+                )
+            else:
+                self.network = network_ready
 
             """
                 In the Bayesian Network, the marginal of the same node should be similar (if not identical)
@@ -116,10 +121,35 @@ class TrafficBayesNetwork:
             assert graph_covered_by_speed_data, 'Some nodes in the network do not have speed data.'
             return graph
 
-    def build_network_from_geo(self, gdf, remove_no_data_segment, remove_isolated_nodes=True):
+    @staticmethod
+    def if_edges_correlation_over_thr(source, target, speed_df, threshold,versbose):
+        # Extract speed time series for source and target
+        source_df = speed_df[speed_df['link_id'] == source][['time', 'speed']].rename(columns={'speed': 'source_speed'})
+        target_df = speed_df[speed_df['link_id'] == target][['time', 'speed']].rename(columns={'speed': 'target_speed'})
+
+        # Merge on time to align the two series
+        merged = pd.merge(source_df, target_df, on='time')
+
+        # Calculate correlation (drop NaNs automatically)
+        if not merged.empty:
+            corr = merged['source_speed'].corr(merged['target_speed'])
+            if versbose > 0:
+                print(f"Correlation between {source} and {target}: {corr}")
+        else:
+            warnings.warn(f"No overlapping time data between {source} and {target}.")
+            return False
+        return corr >= threshold
+        
+
+    def build_network_from_geo(
+            self, gdf, remove_no_data_segment, remove_isolated_nodes=True,
+            correlation_threshold=None, speed_df=None, verbose=0,
+        ):
         """
             remove_no_data_segment should be a dataframe contains the data of segments
         """
+
+        assert not (correlation_threshold is not None and speed_df is None)
 
         graph = nx.DiGraph()
 
@@ -153,12 +183,16 @@ class TrafficBayesNetwork:
                         for coord in target_coords[:-1]:  # exclude end point of the target
                             if (abs(source_end[0] - coord[0]) < tolerance and
                                     abs(source_end[1] - coord[1]) < tolerance):
-                                graph.add_edge(source_link_id, target_link_id)
+                                
+                                if correlation_threshold is not None:  # remove edges with low correlation
+                                    if self.if_edges_correlation_over_thr(
+                                        source_link_id, target_link_id, speed_df, correlation_threshold, 0
+                                    ):
+                                        graph.add_edge(source_link_id, target_link_id)
+                                else:
+                                    graph.add_edge(source_link_id, target_link_id)
                                 break
 
-        # if not nx.is_directed_acyclic_graph(graph):
-        #     import warnings
-        #     warnings.warn('The network is not acyclic.')
         assert nx.is_directed_acyclic_graph(graph), 'The network is not acyclic.'
 
         graph = self.remove_no_data_segment_from_network(graph, remove_no_data_segment)
@@ -445,6 +479,9 @@ class TrafficBayesNetwork:
                 index='time', columns='link_id', values='speed'
             ).dropna()
             child_data = df[df['link_id'] == child].set_index('time')["speed"].dropna()
+
+            if len(parent_data) == 0 or len(child_data) == 0:
+                continue
 
             x = child_data.values.reshape(-1, 1)
             y = parent_data.values  # keep the child at the first dim

@@ -427,6 +427,12 @@ class RoadData:
                         flooded_segments.append(segment_id)
                         break  # One match is enough
         return flooded_segments
+    
+    @ staticmethod
+    def calculate_link_speed_correlation(df):
+        data_pivot = df.pivot(index="time", columns="link_id", values="speed")
+        correlation_matrix = data_pivot.corr()
+        return correlation_matrix
 
 
 def _polyline_parse(string):

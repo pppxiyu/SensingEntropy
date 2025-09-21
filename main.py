@@ -30,8 +30,8 @@ if not load_r:
     """
     Data
     """
-    # Geometry manual processing
     road_data = dd.RoadData()
+    # Geometry manual processing
     # road_data.pull_nyc_dot_traffic(
     #     dir_NYC_data_token, ['2020-04-01', '2020-04-30'], True
     # )  # road geometries have been downloaded, checked, and corrected. Comment this line.
@@ -76,7 +76,7 @@ if not load_t:
     bayes_network_t = mo.TrafficBayesNetwork(
         speed=road_data.speed_resampled, road_geo=road_data.geo, network_mode='causal',
         n_samples=10000, n_components=12, fitting_mode='one-off',
-        remove_nodes=remove_data_from_nodes,
+        remove_nodes=remove_data_from_nodes, corr_thr=.5, 
     )
     # vis.map_roads_n_topology_plt(
     #     geo_roads=road_data.geo.copy(),
@@ -104,11 +104,11 @@ if not load_t:
     # Fit signals
     bayes_network_t.fit_signal(
         road_data.flood_time_per_road, bayes_network_f.marginals,
-        mode='from_marginal', upward=False, signal_filter=.025
+        mode='from_marginal', upward=False, 
     )
     bayes_network_t.fit_signal(
         road_data.flood_time_per_road, bayes_network_f.marginals,
-        mode='from_marginal', upward=True, signal_filter=.025
+        mode='from_marginal', upward=True,
     )
     # for k, v in bayes_network_t.signal_downward.items():
     #     print(f'Distributions under observations at {k}')
