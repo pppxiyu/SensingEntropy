@@ -18,7 +18,7 @@ class TrafficBayesNetwork:
             speed: pd.DataFrame = None, road_geo: gpd.GeoDataFrame = None,
             n_samples: int = None, n_components: int = None,
             network_mode: str = 'causal', fitting_mode: str = 'one-off',
-            remove_nodes: list = None, corr_thr: float = None, network_ready=None,
+            remove_nodes: list = None, corr_thr: float = None, 
     ):
         """
         network_mode: it specifies the direction of edges in the network. "causal" means the arrow points
@@ -46,12 +46,9 @@ class TrafficBayesNetwork:
         self.fitting_mode = fitting_mode
 
         if speed is not None and road_geo is not None:
-            if network_ready is None:
-                self.network = self.build_network_from_geo(
-                    road_geo, remove_no_data_segment=speed, correlation_threshold=corr_thr, speed_df=speed
-                )
-            else:
-                self.network = network_ready
+            self.network = self.build_network_from_geo(
+                road_geo, remove_no_data_segment=speed, correlation_threshold=corr_thr, speed_df=speed
+            )
 
             """
                 In the Bayesian Network, the marginal of the same node should be similar (if not identical)
@@ -70,6 +67,7 @@ class TrafficBayesNetwork:
                 self.remove_nodes_from_network(remove_nodes)
 
             self.speed_data = self.align_data_time(speed, self.network, check_kept_data=False)
+
 
     @staticmethod
     def _find_downstream_segment(segment, gdf):
@@ -96,28 +94,50 @@ class TrafficBayesNetwork:
 
     @staticmethod
     def remove_no_data_segment_from_network(graph, data):
+        """
+        Removes nodes from the graph that do not have corresponding data in the DataFrame.
+        For each such node, connects all its predecessors to all its successors before removal to preserve possible paths.
+
+        Parameters:
+            graph (networkx.DiGraph): The network graph whose nodes correspond to 'link_id' values.
+            data (pd.DataFrame): DataFrame containing at least a 'link_id' column.
+
+        Returns:
+            networkx.DiGraph: The modified graph with only nodes that have data.
+        """
+        
+        # Get a list of all nodes in the graph
         node_list_graph = list(graph.nodes())
+        # Get a list of all unique link_ids present in the data DataFrame
         node_list_gmm = list(data['link_id'].unique())
         graph_node_not_in_gmm = []
+        # For each node in the graph, check if it is missing from the data
         for n in node_list_graph:
             if n not in node_list_gmm:
                 graph_node_not_in_gmm.append(n)
+
         if not graph_node_not_in_gmm:
             return graph
         else:
+            # For each node missing from the data
             for nn in graph_node_not_in_gmm:
+                # Get all predecessors (incoming nodes) of this node
                 predecessors = list(graph.predecessors(nn))
+                # Get all successors (outgoing nodes) of this node
                 successors = list(graph.successors(nn))
+                # For every predecessor and every successor, add an edge between them
                 for pred in predecessors:
                     for succ in successors:
                         graph.add_edge(pred, succ)
                 graph.remove_node(nn)
 
+            # After removal, check that all remaining nodes in the graph are present in the data
             graph_covered_by_speed_data = True
             for n in list(graph.nodes()):
                 if n not in node_list_gmm:
                     graph_covered_by_speed_data = False
                     break
+            # Assert that all nodes in the graph now have data; otherwise, raise an error
             assert graph_covered_by_speed_data, 'Some nodes in the network do not have speed data.'
             return graph
 
@@ -138,7 +158,7 @@ class TrafficBayesNetwork:
         else:
             warnings.warn(f"No overlapping time data between {source} and {target}.")
             return False
-        return corr >= threshold
+        return corr > threshold
         
 
     def build_network_from_geo(
@@ -186,7 +206,7 @@ class TrafficBayesNetwork:
                                 
                                 if correlation_threshold is not None:  # remove edges with low correlation
                                     if self.if_edges_correlation_over_thr(
-                                        source_link_id, target_link_id, speed_df, correlation_threshold, 0
+                                        source_link_id, target_link_id, speed_df, correlation_threshold, verbose
                                     ):
                                         graph.add_edge(source_link_id, target_link_id)
                                 else:
@@ -196,6 +216,13 @@ class TrafficBayesNetwork:
         assert nx.is_directed_acyclic_graph(graph), 'The network is not acyclic.'
 
         graph = self.remove_no_data_segment_from_network(graph, remove_no_data_segment)
+        # Remove edges from the graph if their correlation is below the threshold
+        if correlation_threshold is not None and speed_df is not None:
+            edges_to_remove = []
+            for source, target in list(graph.edges()):
+                if not self.if_edges_correlation_over_thr(source, target, speed_df, correlation_threshold, verbose):
+                    edges_to_remove.append((source, target))
+            graph.remove_edges_from(edges_to_remove)
 
         if self.network_mode == 'causal':
             graph = graph.reverse(copy=True)
@@ -300,6 +327,21 @@ class TrafficBayesNetwork:
         return list(graph.edges())
 
     def align_data_time(self, df, graph, check_kept_data=False,):
+        """
+        Aligns time series data across all nodes in the network for each connected component,
+        so that only timestamps present for every node in each connected component are kept.
+
+        Parameters:
+            df (pd.DataFrame): Input DataFrame with at least 'link_id' and 'time' columns.
+            graph (networkx.Graph or DiGraph): The network graph whose nodes correspond to 'link_id' values.
+            check_kept_data (bool): If True, also returns statistics about data loss per node due to alignment.
+
+        Returns:
+            pd.DataFrame: Filtered DataFrame containing only rows with timestamps present for all nodes in each component.
+            (optional) float: If check_kept_data is True, also returns the average loss ratio of data per node.
+        """
+
+        # For each node, get the set of timestamps where it has data
         timestamps_per_node = (
             df.groupby('link_id')['time']
             .apply(set)
@@ -307,15 +349,20 @@ class TrafficBayesNetwork:
         )
 
         dfs_consistent = []
+
+        # Find connected components (weakly for directed graphs)
         components = (
             nx.connected_components(graph) if not graph.is_directed()
             else nx.weakly_connected_components(graph)
         )
         for component in components:
+            # Find timestamps present for all nodes in the component
             common_timestamps = set.intersection(
                 *[timestamps_per_node.get(node, set()) for node in component]
             )
+            # Filter df to only rows for nodes in this component
             df_component = df[df['link_id'].isin(component)]
+            # Further filter to only rows with common timestamps
             df_component = df_component[df_component['time'].isin(common_timestamps)]
             dfs_consistent.append(df_component)
         df_final = pd.concat(dfs_consistent, ignore_index=True)
