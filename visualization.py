@@ -538,3 +538,79 @@ def bar_flood_prob(row):
     plt.show()
 
 
+def scatter_diff_vs_estimated_diff(
+        kld, kld_estimated, out_file=None, 
+        xscale='log', yscale='log', reg='linear', base=10,):
+    import numpy as np
+    import os
+    from scipy import stats
+
+    if xscale not in ('linear', 'log',):
+        raise ValueError("xscale must be one of 'linear', or 'log'")
+    if yscale not in ('linear', 'log',):
+        raise ValueError("xscale must be one of 'linear', or 'log'")
+    if reg not in ('robust', 'linear',):
+        raise ValueError("xscale must be one of 'robust', or 'linear'")
+    
+    x = np.asarray(kld)
+    y = np.asarray(kld_estimated)
+
+    # regression line
+    def _txy(scale, v):
+        if scale == 'linear':
+            return v
+        if scale == 'log':
+            return np.log(v) / np.log(base)
+        
+    def _inv_txy(scale, v):
+        if scale == 'linear':
+            return v
+        if scale == 'log':
+            return base ** v
+        
+    tx = _txy(xscale, x)
+    ty = _txy(yscale, y)
+    if reg == 'robust':
+        slope, intercept, *_ = stats.theilslopes(ty, tx, 0.95)
+    elif reg == 'linear':
+        slope, intercept = np.polyfit(tx, ty, 1)
+    xs = np.linspace(np.nanmin(x), np.nanmax(x), 400)
+    y_line_t = slope * _txy(xscale, xs) + intercept
+    y_line = _inv_txy(yscale, y_line_t)
+
+    # calculate r2
+    from sklearn.linear_model import LinearRegression
+    model = LinearRegression().fit(tx.reshape(-1, 1), ty)
+    r2 = model.score(tx.reshape(-1, 1), ty)
+
+    # visualization
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.scatter(x, y, alpha=0.85, edgecolor='k', s=60, marker='o')
+    ax.set_xlabel('KLD between prior and ground truth', fontsize=12)
+    ax.set_ylabel('Relative improvement from prior to posterior', fontsize=12)
+
+    ax.plot(xs, y_line, color='red', linestyle='--', linewidth=2,
+            label='Trend (fitted on transformed x)')
+    
+    if xscale == 'log':
+        ax.set_xscale('log', base=base)
+    if yscale == 'log':
+        ax.set_yscale('log', base=base)
+
+    ax.legend()
+
+    r2_text = f'$R^2$ = {r2:.3f}' if np.isfinite(r2) else '$R^2$ = N/A'
+    ax.annotate(r2_text, xy=(0.02, 0.95), xycoords='axes fraction',
+                ha='left', va='top', fontsize=11,
+                bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.8))
+
+    plt.tight_layout()
+    if out_file:
+        os.makedirs(os.path.dirname(out_file) or '.', exist_ok=True)
+        fig.savefig(out_file, dpi=300)
+        print(f'Saved scatter plot to {out_file}')
+    plt.show()
+    return
+
+
+

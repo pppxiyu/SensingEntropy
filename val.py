@@ -83,4 +83,7 @@ for i in road_data.flood_time_citywide.copy().drop(
 kld = [i for i in kld if i[0] is not None]
 relative_changes = [(e1 - e2) / e1 if e1 != 0 else 0 for e1, e2 in kld]
 
+print(f'Averaged relative change is: {sum(relative_changes) / len(relative_changes)}')
+vis.scatter_diff_vs_estimated_diff([i[0] for i in kld], [i[1] for i in kld])
+
 print('End of program.')
