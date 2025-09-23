@@ -76,7 +76,7 @@ if not load_t:
     bayes_network_t = mo.TrafficBayesNetwork(
         speed=road_data.speed_resampled, road_geo=road_data.geo, network_mode='causal',
         n_samples=10000, n_components=12, fitting_mode='one-off',
-        remove_nodes=remove_data_from_nodes, corr_thr=.5, 
+        remove_nodes=remove_data_from_nodes, corr_thr=corr_thr, 
     )
     # vis.map_roads_n_topology_plt(
     #     geo_roads=road_data.geo.copy(),

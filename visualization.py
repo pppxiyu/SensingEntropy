@@ -580,8 +580,8 @@ def scatter_diff_vs_estimated_diff(
 
     # calculate r2
     from sklearn.linear_model import LinearRegression
-    model = LinearRegression().fit(tx.reshape(-1, 1), ty)
-    r2 = model.score(tx.reshape(-1, 1), ty)
+    model = LinearRegression().fit(ty.reshape(-1, 1), tx)
+    r2 = model.score(ty.reshape(-1, 1), tx)
 
     # visualization
     fig, ax = plt.subplots(figsize=(9, 6))

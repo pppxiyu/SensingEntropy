@@ -10,12 +10,35 @@ np.random.seed(0)
 df_random_seed = 0
 import os
 os.environ['PYTHONHASHSEED'] = str(0)
+import pandas as pd
 
 
 road_data = dd.RoadData()
 road_data.load_instance('./cache/instances/road_data')
 bayes_network_t = mo.TrafficBayesNetwork()
 bayes_network_t.load_instance('./cache/instances/bayes_network_t')
+
+# get traffic data during normal time
+normal_t_data = []
+for i in road_data.flood_time_citywide.copy().drop(
+        road_data.flood_time_citywide.copy().sample(frac=0.8, random_state=df_random_seed).index
+).index:
+    rd_n = dd.RoadData()
+    p = dd.get_period_before_start(road_data.flood_time_citywide.copy().iloc[[i]], 3)
+    d_normal = rd_n.pull_nyc_dot_traffic_flooding(dir_NYC_data_token, select_incidents=p)
+    if d_normal is not None:
+        rd_n.resample_nyc_dot_traffic(rd_n.speed)
+        normal_t_data.append(rd_n.speed_resampled)
+
+# fit priors from normal traffic data
+bayes_network_normal = mo.TrafficBayesNetwork(
+    speed=pd.concat(normal_t_data), road_geo=road_data.geo, 
+    n_samples=10000, n_components=12, 
+    remove_nodes=remove_data_from_nodes, corr_thr=corr_thr,
+)
+bayes_network_normal.fit_joint()
+bayes_network_normal.fit_marginal_from_joints(upward=False)
+# bayes_network_normal.fit_marginal_from_data()
 
 # validate on each incident
 kld = []
@@ -43,19 +66,19 @@ for i in road_data.flood_time_citywide.copy().drop(
         continue
     rd_test.resample_nyc_dot_traffic(rd_test.speed)
 
-    # fit marginals from the traffic data
+    # fit marginals from the incident traffic data
     bn_t_test = mo.TrafficBayesNetwork(
         speed=rd_test.speed_resampled, road_geo=road_data.geo,
         n_samples=10000, n_components=12,
-        remove_nodes=remove_data_from_nodes, corr_thr=.5,
+        remove_nodes=remove_data_from_nodes, corr_thr=corr_thr,
     )
     bn_t_test.fit_marginal_from_data()
 
     # filter inundations: bn_t_test.marginals[k] used
     if len([k for k in inundation if k in bn_t_test.marginals]) != len(inundation):
         continue
-
-    # estimate
+    
+    # estimate using the trained BN
     marginals_flood, update_loc_f = bayes_network_t.update_network_with_multiple_soft_evidence(
         [{**{k: bn_t_test.marginals[k] for k in inundation}},  # signal_down
         {**{k: bn_t_test.marginals[k] for k in inundation}},],  # signal_up
@@ -67,23 +90,46 @@ for i in road_data.flood_time_citywide.copy().drop(
     # eval
     print(f'Signal locs: {inundation}')
     # update_locs = update_loc_f['down'] + update_loc_f['up']
-    update_locs = [i for i in (update_loc_f['down'] +  update_loc_f['up']) if i not in inundation]  # remove signal locs
+    update_locs = [i for i in (update_loc_f['down'] + update_loc_f['up']) if i not in inundation]  # remove signal locs
     print(f'All traversed locs: {update_locs}')
 
-    estimated = bayes_network_t.calculate_network_kl_divergence([
+    # # compared disruption level 
+    # true_disruption = bayes_network_t.calculate_network_kl_divergence([
+    #     {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
+    #     {k: v for k, v in bayes_network_normal.marginals_downward.items() if k in update_locs},  # averaged (normal period)
+    # ])
+    # estimated_disruption = bayes_network_t.calculate_network_kl_divergence([
+    #     {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
+    #     {k: v for k, v in bayes_network_normal.marginals_downward.items() if k in update_locs},  # averaged (normal period)
+    # ])
+    # kld.append([true_disruption, estimated_disruption])
+
+    # compared estimation error reduction (with flood belief)
+    error_prior = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged (flood period)
+        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
+    ])
+    error_posterior = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
-        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident ground truth
+        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident
     ])
-    historical = bayes_network_t.calculate_network_kl_divergence([
-        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged
-        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident ground truth
-    ])
-    kld.append([historical, estimated])
+    kld.append([error_prior, error_posterior, update_locs])
 
-kld = [i for i in kld if i[0] is not None]
-relative_changes = [(e1 - e2) / e1 if e1 != 0 else 0 for e1, e2 in kld]
+    # # compared estimation error reduction (with normal belief)
+    # error_naive = bayes_network_t.calculate_network_kl_divergence([
+    #     {k: v for k, v in bayes_network_normal.marginals_downward.items() if k in update_locs},  # averaged (normal period)
+    #     {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
+    # ])
+    # error_posterior = bayes_network_t.calculate_network_kl_divergence([
+    #     {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
+    #     {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident
+    # ])
+    # kld.append([error_naive, error_posterior])
 
+kld = [i for i in kld if i[0] is not None and i[1] is not None]
+relative_changes = [(i[1] - i[0]) / i[0] for i in kld]
 print(f'Averaged relative change is: {sum(relative_changes) / len(relative_changes)}')
-vis.scatter_diff_vs_estimated_diff([i[0] for i in kld], [i[1] for i in kld])
+
+vis.scatter_diff_vs_estimated_diff([i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld])
 
 print('End of program.')
