@@ -1120,16 +1120,17 @@ class TrafficBayesNetwork:
         return divergence
 
     @staticmethod
-    def calculate_network_kl_divergence(network_list, verbose=1, label=None):
+    def calculate_network_kl_divergence(network_list, verbose=1, label=None, expand='False'):
         assert len(network_list), 'Divergence is between two networks'
         network_0, network_1 = network_list[0], network_list[1]  # estimate, ground truth
         common_keys = network_0.keys() & network_1.keys()
 
-        divergence = 0
+        divergence_list = []
         computed = False
         for k in common_keys:
-            divergence += calculate_kl_divergence_gmm(network_0[k], network_1[k])
+            divergence_list.append(calculate_kl_divergence_gmm(network_0[k], network_1[k]))
             computed = True
+        divergence = sum(divergence_list)
 
         if not computed:
             warnings.warn('No KL divergence is computed.')
@@ -1140,7 +1141,10 @@ class TrafficBayesNetwork:
                 print(f"KL divergencey of the two Bayesian Network w. observation {label}: {divergence}")
             else:
                 print(f"KL divergencey of the two Bayesian Network: {divergence}")
-        return divergence
+        if expand == 'False':
+            return divergence
+        elif expand == 'True':
+            return divergence_list
 
     def compress_multi_gmm(self, bn_list: dict):
         marginals, joints = None, None
