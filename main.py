@@ -43,8 +43,8 @@ if not load_r:
     #     road_data.geo.to_crs(local_crs), road_data.df.to_crs(local_crs), buffer=20,
     # )  # FIGURE X: flood point and roads
     # vis.map_flood_p(road_data.geo, road_data.closure_p_per_segment, mapbox_token, local_crs)  # FIGURE X: flood p
-    road_data.infer_flooding_time_citywide()
-    road_data.infer_flooding_time_per_road()
+    road_data.infer_flooding_time_citywide(pre_flood_buffer=2, post_flood_buffer=4)
+    road_data.infer_flooding_time_per_road(pre_flood_buffer=2, post_flood_buffer=4)
 
     # Pull traffic data in flooding periods
     road_data.pull_nyc_dot_traffic_flooding(
@@ -114,12 +114,12 @@ if not load_t:
     #     print(f'Distributions under observations at {k}')
     #     vis.dist_discrete_gmm(v, bayes_network_t.marginals[k],)  # FIGURE 3: distribution with observation
 
-    bayes_network_t.organize_keys()
+    bayes_network_t.check_keys()
     bayes_network_t.save_instance('./cache/instances/bayes_network_t')
 # mo.check_gmr_bn_consistency(list(bayes_network_t.marginals.keys()), bayes_network_t.joints)
 
 """
-Inference and placement
+Placement
 """
 # Update network with observation
 for n in range(sensor_count):
@@ -134,44 +134,26 @@ for n in range(sensor_count):
 
         results = {}
         for k, v in bayes_network_t.signal_downward.items():
-            inferred_signals_no_flood = bayes_network_t.convert_state_to_dist(
-                bayes_network_f.infer_node_states(k, 0, 1, 1)
-            )
             inferred_signals_flood = bayes_network_t.convert_state_to_dist(
                 bayes_network_f.infer_node_states(k, 1, 1, 1)
             )
-            marginals_no_flood, update_loc_nf = bayes_network_t.update_network_with_multiple_soft_evidence(
-                [
-                    {**{k: v['speed_no_flood']}, **inferred_signals_no_flood[0]},
-                    {**{k: bayes_network_t.signal_upward[k]['speed_no_flood']}, **inferred_signals_no_flood[1]},
-                ],
-                [
-                    bayes_network_t.marginals_downward.copy(),
-                    bayes_network_t.marginals_upward.copy()
-                ],
-                bayes_network_t.joints.copy(),
-                verbose=0
-            )
             marginals_flood, update_loc_f = bayes_network_t.update_network_with_multiple_soft_evidence(
                 [
-                    {**{k: v['speed_flood']}, **inferred_signals_flood[0]},
-                    {**{k: bayes_network_t.signal_upward[k]['speed_flood']}, **inferred_signals_flood[1]},
+                    {**{k: v['speed_flood']}, **inferred_signals_flood[0]},  # downward
+                    {**{k: bayes_network_t.signal_upward[k]['speed_flood']}, **inferred_signals_flood[1]},  # upward
                 ],
-                [
-                    bayes_network_t.marginals_downward.copy(),
-                    bayes_network_t.marginals_upward.copy()
-                ],
+                [bayes_network_t.marginals_downward.copy(), bayes_network_t.marginals_upward.copy()],
                 bayes_network_t.joints.copy(),
                 verbose=0
             )
-            bn_updated = [
-                {'p': 1 - v['p_flood'], 'marginals': marginals_no_flood},
-                {'p': v['p_flood'], 'marginals': marginals_flood},
-            ]
+            bn_updated = [{'p': v['p_flood'], 'marginals': marginals_flood}]
             results[k] = {
                 'bn_updated': bn_updated,
-                'info_gain': bayes_network_t.calculate_network_conditional_kl_divergence(
-                    bn_updated, [update_loc_nf, update_loc_f], label=k
+                'info_gain': bayes_network_t.calculate_network_kl_divergence(
+                    [
+                        {k: v for k, v in marginals_flood.items() if k in update_loc_f},  # estimate
+                        {k: v for k, v in bayes_network_t.marginals_downward.copy().items() if k in update_loc_f},  # incident
+                    ], label=k
                 ),
             }
             # if (k in joints_flood.keys()) and (len(joints_flood[k][0]) == 1):

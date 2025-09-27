@@ -68,7 +68,6 @@ class TrafficBayesNetwork:
 
             self.speed_data = self.align_data_time(speed, self.network, check_kept_data=False)
 
-
     @staticmethod
     def _find_downstream_segment(segment, gdf):
         end_point = segment.geometry.coords[-1]
@@ -548,12 +547,12 @@ class TrafficBayesNetwork:
 
     def fit_signal(
             self, segment_flood_time, flood_prob,
-            mode='from_marginal', verbose=0, upward=False, signal_filter=.035
+            mode='from_marginal', verbose=0, upward=False, signal_filter=None
     ):
         import warnings
 
         def get_gmm(df):
-            if (len(df)) > 50 and (df.sum() != 0):
+            if (len(df)) > 10 and (df.sum() != 0):
                 gmm = self._optimal_gmm(df.values.reshape(-1, 1), )
             else:
                 gmm = None
@@ -568,59 +567,76 @@ class TrafficBayesNetwork:
             link_id = row['link_id']
             p_flood = row['p']
 
+            # Subset speed data for this link; if missing, record empty result and continue
             speed_data = speed[speed['link_id'] == link_id].copy()
             if speed_data.empty or link_id not in segment_flood_time:
-                dists[link_id] = {
-                    'p_flood': p_flood,
-                    'speed_no_flood': None,
-                    'speed_flood': None
-                }
+                # dists[link_id] = {
+                #     'p_flood': p_flood,
+                #     'speed_no_flood': None,
+                #     'speed_flood': None
+                # }
                 continue
 
+            # Mark rows that fall within any flood event buffer window
             flood_events = segment_flood_time[link_id]
             speed_data['flooded'] = False
             event_wise_dist = []
             speed_data_original = speed_data.copy()
+
+            # For each recorded flood event, label observations during the buffered window
             for _, event in flood_events.iterrows():
                 mask = (speed_data['time'] >= event['buffer_start']) & (speed_data['time'] <= event['buffer_end'])
                 speed_data.loc[mask, 'flooded'] = True
+
+                # If signal_filter is requested, collect per-event GMMs to measure event-to-event consistency
                 if signal_filter is not None:
                     speed_data_original.loc[mask, 'flooded'] = True
                     d = speed_data_original[speed_data_original['flooded']]['speed']
                     dist = get_gmm(d)
                     event_wise_dist.append(dist)
 
+            # If a consistency filter is provided, compare pairwise KL between event GMMs
             if signal_filter is not None:
                 from itertools import combinations
                 dist_list = []
+
+                # If only one event, skip (not enough to compare)
                 if len(event_wise_dist) == 1:
                     # dist_list.append(0)
-                    dists[link_id] = {
-                        'p_flood': p_flood,
-                        'speed_no_flood': None,
-                        'speed_flood': None
-                    }
+                    # dists[link_id] = {
+                    #     'p_flood': p_flood,
+                    #     'speed_no_flood': None,
+                    #     'speed_flood': None
+                    # }
                     continue
 
+                # Compute KL divergences between each pair of event GMMs; missing GMMs contribute 0
                 for gmm_a, gmm_b in combinations(event_wise_dist, 2):
                     if gmm_a is None or gmm_b is None:
                         dist_list.append(0)
                     else:
                         dist_list.append(calculate_kl_divergence_gmm(gmm_a, gmm_b))
+
+                # Average divergence; if too large, treat link as unreliable and skip
                 ave_dist = sum(dist_list) / len(dist_list)
                 if ave_dist > signal_filter:
-                    dists[link_id] = {
-                        'p_flood': p_flood,
-                        'speed_no_flood': None,
-                        'speed_flood': None
-                    }
+                    # dists[link_id] = {
+                    #     'p_flood': p_flood,
+                    #     'speed_no_flood': None,
+                    #     'speed_flood': None
+                    # }
                     continue
 
+            # Prepare flood / non-flood samples depending on selected mode
             speed_no_flood, speed_flood = None, None
             if mode == 'from_data':
+                # Directly use observed speeds labeled as flooded / not flooded
                 speed_flood = speed_data[speed_data['flooded']]['speed']
                 speed_no_flood = speed_data[~speed_data['flooded']]['speed']
+
             elif mode == 'from_marginal':
+
+                # Sample synthetic observations from fitted marginals, then split by the flooded labels
                 if upward:
                     assert self.marginals_upward is not None, 'Marginals have not been fit yet'
                     marginal = self.marginals_upward[link_id]
@@ -634,9 +650,14 @@ class TrafficBayesNetwork:
                 speed_flood = pd.Series(samples[speed_data['flooded'].to_numpy()][:, 0])
                 speed_no_flood = pd.Series(samples[~speed_data['flooded'].to_numpy()][:, 0])
 
+                if speed_flood.empty or speed_no_flood.empty:
+                    continue
+            
+            # Fit GMMs for flooded and non-flooded samples (may return None if insufficient data)
             gmm_no_flood = get_gmm(speed_no_flood)
             gmm_flood = get_gmm(speed_flood)
 
+            # Store results for this link
             dists[link_id] = {
                 'p_flood': p_flood,
                 'speed_no_flood': gmm_no_flood,
@@ -1221,32 +1242,32 @@ class TrafficBayesNetwork:
             print('Failed to load Traffic Bayesian Network, build from scratch')
             return False
 
-    def organize_keys(self):
+    def check_keys(self):
         # check consistency between joints and the graph
         assert set(self.joints.keys()).issubset(self.network.nodes())  # joints are a subset of graph
         mentioned_nodes = set(self.joints.keys())  # dict keys
         for value in self.joints.values():
             mentioned_nodes.update(value.get('parents', []))  # add parents
-        assert mentioned_nodes == set(self.network.nodes), "Mentioned nodes must equal graph nodes"
+        assert mentioned_nodes == set(self.network.nodes), "All nodes mentioned by joints must equal all graph nodes"
 
-        # check marginals and joints/network
+        # all nodes in the graph should have marginals
         common_keys = set(self.network.nodes()) & set(self.marginals_downward.keys())
         self.marginals_downward = {k: v for k, v in self.marginals_downward.items() if k in common_keys}
 
         common_keys = set(self.network.nodes()) & set(self.marginals_upward.keys())
         self.marginals_upward = {k: v for k, v in self.marginals_upward.items() if k in common_keys}
 
-        # check signals and joints/network
+        # filter out signals without both flood and non-flood GMMs fitted
         self.signal_downward = {
             k: v for k, v in self.signal_downward.items()
-            if v['speed_no_flood'] is not None and v['speed_flood'] is not None
+            if v['speed_flood'] is not None #and v['speed_no_flood'] is not None
         }
         common_keys = set(self.network.nodes()) & set(self.signal_downward.keys())
         self.signal_downward = {k: v for k, v in self.signal_downward.items() if k in common_keys}
 
         self.signal_upward = {
             k: v for k, v in self.signal_upward.items()
-            if v['speed_no_flood'] is not None and v['speed_flood'] is not None
+            if v['speed_flood'] is not None #and v['speed_no_flood'] is not None
         }
         common_keys = set(self.network.nodes()) & set(self.signal_upward.keys())
         self.signal_upward = {k: v for k, v in self.signal_upward.items() if k in common_keys}
@@ -1707,4 +1728,32 @@ def check_gmr_bn_consistency(node_list: list, joints: dict):
                     node_index = v_list.index(node)
                     marginal = marginalize_gmm(joint, node_index)
                     vis.dist_gmm_1d(marginal, title=node)
+
+def sample_positively(gmm, n_positive_samples, max_attempts=None):
+    """
+    Sample positive values from a GMM using rejection sampling.
+    
+    Parameters:
+    - gmm: fitted GaussianMixture model
+    - n_positive_samples: number of positive samples needed
+    - max_attempts: maximum total samples to generate (prevents infinite loops)
+    """
+    if max_attempts is None:
+        max_attempts = n_positive_samples * 10  # reasonable default
+    
+    positive_samples = []
+    total_generated = 0
+    
+    while len(positive_samples) < n_positive_samples and total_generated < max_attempts:
+        # Generate batch of samples
+        batch_size = min(1000, (n_positive_samples - len(positive_samples)) * 2)
+        samples, _ = gmm.sample(batch_size)
+        
+        # Keep only positive samples
+        positive_batch = samples[samples > 0]
+        positive_samples.extend(positive_batch)
+        total_generated += batch_size
+    
+    # Return exactly n_positive_samples
+    return np.expand_dims(np.array(positive_samples[:n_positive_samples]), axis=-1)
 

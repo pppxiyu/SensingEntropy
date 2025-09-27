@@ -39,7 +39,8 @@ bayes_network_normal = mo.TrafficBayesNetwork(
 bayes_network_normal.fit_marginal_from_data()
 
 # validate on each incident
-kld = []
+kld_d = []
+kld_i = []
 for i in road_data.flood_time_citywide.copy().index:
 
     # get inundated roads during the incident
@@ -96,22 +97,23 @@ for i in road_data.flood_time_citywide.copy().index:
         {k: v for k, v in bayes_network_normal.marginals.items() if k in update_locs},  # averaged (normal period)
     ], expand='True'
     )
-    kld.append([true_disruption, estimated_disruption, update_locs])
+    kld_d.append([true_disruption, estimated_disruption, update_locs])
 
-    # # compared estimation error reduction (with flood belief)
-    # error_prior = bayes_network_t.calculate_network_kl_divergence([
-    #     {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged (flood period)
-    #     {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
-    # ], expand='True'
-    # )
-    # error_posterior = bayes_network_t.calculate_network_kl_divergence([
-    #     {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
-    #     {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident
-    # ], expand='True'
-    # )
-    # kld.append([error_prior, error_posterior, update_locs])
+    # compared estimation error reduction (with flood belief)
+    error_prior = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged (flood period)
+        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
+    ], expand='True'
+    )
+    error_posterior = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
+        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident
+    ], expand='True'
+    )
+    kld_i.append([error_prior, error_posterior, update_locs])
 
-kld_expand =  [
+kld = kld_i
+kld_expand = [
     [v1, v2, k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
     for v1, v2 in zip(k[0], k[1]) if v1 is not None and v2 is not None
 ]  # no common keys when calculating KL divergence, or no propagated nodes

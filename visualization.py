@@ -580,14 +580,14 @@ def scatter_diff_vs_estimated_diff(
 
     # calculate r2
     from sklearn.linear_model import LinearRegression
-    model = LinearRegression().fit(ty.reshape(-1, 1), tx)
-    r2 = model.score(ty.reshape(-1, 1), tx)
+    model = LinearRegression().fit(y.reshape(-1, 1), x)
+    r2 = model.score(y.reshape(-1, 1), x)
 
     # visualization
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.scatter(x, y, alpha=0.85, edgecolor='k', s=60, marker='o')
-    ax.set_xlabel('KLD between prior and ground truth', fontsize=12)
-    ax.set_ylabel('Relative improvement from prior to posterior', fontsize=12)
+    ax.set_xlabel('KLD 1', fontsize=12)
+    ax.set_ylabel('KLD 2', fontsize=12)
 
     ax.plot(xs, y_line, color='red', linestyle='--', linewidth=2,
             label='Trend (fitted on transformed x)')

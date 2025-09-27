@@ -154,7 +154,7 @@ class RoadData:
         gdf['time_create'] = pd.to_datetime(gdf['time_create'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
         gdf['time_close'] = pd.to_datetime(gdf['time_close'], format='%m/%d/%Y %I:%M:%S %p', errors='coerce')
         gdf = gpd.GeoDataFrame(gdf, geometry='geometry').set_crs('4326')
-        gdf = gdf[['id', 'geometry', 'time_create',]]
+        gdf = gdf[['id', 'geometry', 'time_create', ]]
 
         # filter closure using the buffer zones of roads
         road_geo = self.geo.to_crs(crs).copy()
@@ -215,9 +215,9 @@ class RoadData:
         return
 
     @staticmethod
-    def infer_flooding_time(df):
-        df['buffer_start'] = df['time_create'] - pd.Timedelta(hours=12)
-        df['buffer_end'] = df['time_create'] + pd.Timedelta(hours=12)
+    def infer_flooding_time(df, pre_flood_buffer, post_flood_buffer):
+        df['buffer_start'] = df['time_create'] - pd.Timedelta(hours=pre_flood_buffer)
+        df['buffer_end'] = df['time_create'] + pd.Timedelta(hours=post_flood_buffer)
 
         df = df.sort_values('time_create').reset_index(drop=True)
         non_overlap_df = pd.DataFrame(columns=['buffer_start', 'buffer_end']).astype(
@@ -264,16 +264,16 @@ class RoadData:
         )
         return combined_df
 
-    def infer_flooding_time_citywide(self):
-        self.flood_time_citywide = self.infer_flooding_time(self.closures.copy())
+    def infer_flooding_time_citywide(self, pre_flood_buffer, post_flood_buffer):
+        self.flood_time_citywide = self.infer_flooding_time(self.closures.copy(), pre_flood_buffer, post_flood_buffer)
         return
 
-    def infer_flooding_time_per_road(self,):
+    def infer_flooding_time_per_road(self, pre_flood_buffer, post_flood_buffer):
         flood_time_per_road = {}
         closures = self.closures.copy()
         for road in closures['link_id'].unique():
             closures_select = closures.loc[closures['link_id'] == road, :]
-            flood_time_per_road[road] = self.infer_flooding_time(closures_select.copy())
+            flood_time_per_road[road] = self.infer_flooding_time(closures_select.copy(), pre_flood_buffer, post_flood_buffer)
         self.flood_time_per_road = flood_time_per_road
         return
 

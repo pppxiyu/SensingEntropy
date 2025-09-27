@@ -16,4 +16,4 @@ remove_data_from_nodes = ['4616195', '4616229', '4616223',]
 
 sensor_count = 1
 
-corr_thr = 0.6  # correlation threshold when building the bayesian network
+corr_thr = .6  # correlation threshold when building the bayesian network
