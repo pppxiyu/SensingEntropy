@@ -1141,7 +1141,7 @@ class TrafficBayesNetwork:
         return divergence
 
     @staticmethod
-    def calculate_network_kl_divergence(network_list, verbose=1, label=None, expand='False'):
+    def calculate_network_kl_divergence(network_list, verbose=1, label=None, expand=False):
         assert len(network_list), 'Divergence is between two networks'
         network_0, network_1 = network_list[0], network_list[1]  # estimate, ground truth
         common_keys = network_0.keys() & network_1.keys()
@@ -1162,9 +1162,9 @@ class TrafficBayesNetwork:
                 print(f"KL divergencey of the two Bayesian Network w. observation {label}: {divergence}")
             else:
                 print(f"KL divergencey of the two Bayesian Network: {divergence}")
-        if expand == 'False':
+        if expand == False:
             return divergence
-        elif expand == 'True':
+        if expand == True:
             return divergence_list
 
     def compress_multi_gmm(self, bn_list: dict):
@@ -1728,32 +1728,4 @@ def check_gmr_bn_consistency(node_list: list, joints: dict):
                     node_index = v_list.index(node)
                     marginal = marginalize_gmm(joint, node_index)
                     vis.dist_gmm_1d(marginal, title=node)
-
-def sample_positively(gmm, n_positive_samples, max_attempts=None):
-    """
-    Sample positive values from a GMM using rejection sampling.
-    
-    Parameters:
-    - gmm: fitted GaussianMixture model
-    - n_positive_samples: number of positive samples needed
-    - max_attempts: maximum total samples to generate (prevents infinite loops)
-    """
-    if max_attempts is None:
-        max_attempts = n_positive_samples * 10  # reasonable default
-    
-    positive_samples = []
-    total_generated = 0
-    
-    while len(positive_samples) < n_positive_samples and total_generated < max_attempts:
-        # Generate batch of samples
-        batch_size = min(1000, (n_positive_samples - len(positive_samples)) * 2)
-        samples, _ = gmm.sample(batch_size)
-        
-        # Keep only positive samples
-        positive_batch = samples[samples > 0]
-        positive_samples.extend(positive_batch)
-        total_generated += batch_size
-    
-    # Return exactly n_positive_samples
-    return np.expand_dims(np.array(positive_samples[:n_positive_samples]), axis=-1)
 

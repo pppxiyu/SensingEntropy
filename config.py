@@ -6,7 +6,7 @@ dir_NYC_data_token = 'data/nyc_opendata_token.txt'
 dir_city_boundary = 'data/nyc_boundary/nybb.shp'
 dir_adapted_nyc_roads = 'data/nyc_roads_geometry_corrected.geojson'
 dir_mapbox_token = './data/mapbox_token.txt'
-dir_figure_save = './data/figures'
+dir_results = './results'
 
 with open(dir_mapbox_token, "r") as file:
     mapbox_token = file.read()

@@ -43,8 +43,8 @@ if not load_r:
     #     road_data.geo.to_crs(local_crs), road_data.df.to_crs(local_crs), buffer=20,
     # )  # FIGURE X: flood point and roads
     # vis.map_flood_p(road_data.geo, road_data.closure_p_per_segment, mapbox_token, local_crs)  # FIGURE X: flood p
-    road_data.infer_flooding_time_citywide(pre_flood_buffer=2, post_flood_buffer=4)
-    road_data.infer_flooding_time_per_road(pre_flood_buffer=2, post_flood_buffer=4)
+    road_data.infer_flooding_time_citywide(pre_flood_buffer=4, post_flood_buffer=8)
+    road_data.infer_flooding_time_per_road(pre_flood_buffer=4, post_flood_buffer=8)
 
     # Pull traffic data in flooding periods
     road_data.pull_nyc_dot_traffic_flooding(

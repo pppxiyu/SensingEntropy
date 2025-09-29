@@ -49,6 +49,8 @@ for i in road_data.flood_time_citywide.copy().index:
         road_data.flood_time_per_road, # road time periods
         road_data.flood_time_citywide.copy().iloc[[i]]  # incident time period
     )
+    if inundation is None or len(inundation) == 0:
+        continue  # no inundation detected
 
     # filter inundations: bayes_network_t.marginals_downward[k] used
     if len([k for k in inundation if k in bayes_network_t.marginals_downward]) != len(inundation):
@@ -90,12 +92,12 @@ for i in road_data.flood_time_citywide.copy().index:
     true_disruption = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
         {k: v for k, v in bayes_network_normal.marginals.items() if k in update_locs},  # averaged (normal period)
-    ], expand='True'
+    ], expand=True 
     )
     estimated_disruption = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
         {k: v for k, v in bayes_network_normal.marginals.items() if k in update_locs},  # averaged (normal period)
-    ], expand='True'
+    ], expand=True 
     )
     kld_d.append([true_disruption, estimated_disruption, update_locs])
 
@@ -103,24 +105,54 @@ for i in road_data.flood_time_citywide.copy().index:
     error_prior = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged (flood period)
         {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
-    ], expand='True'
+    ], expand=True 
     )
     error_posterior = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
         {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident
-    ], expand='True'
+    ], expand=True  
     )
     kld_i.append([error_prior, error_posterior, update_locs])
 
-kld = kld_i
-kld_expand = [
-    [v1, v2, k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
-    for v1, v2 in zip(k[0], k[1]) if v1 is not None and v2 is not None
-]  # no common keys when calculating KL divergence, or no propagated nodes
-relative_changes = [(i[1] - i[0]) / i[0] for i in kld_expand]
-print(f'Averaged relative change is: {sum(relative_changes) / len(relative_changes)}')
-vis.scatter_diff_vs_estimated_diff(
-    [i[0] / len(i[2]) for i in kld_expand], [i[1] / len(i[2]) for i in kld_expand], xscale='linear', yscale='linear'
-)
+results_table = {}
+k_labels = ['kld_disruption', 'kld_incident']
+j_labels = ['kld_expand', 'kld_ave']
+
+for k_idx, k in enumerate([kld_d, kld_i]):
+    kld = k
+    k_label = k_labels[k_idx]
+
+    kld_expand = [
+        [v1, v2, k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
+        for v1, v2 in zip(k[0], k[1]) if v1 is not None and v2 is not None
+    ]  # no common keys when calculating KL divergence, or no propagated nodes
+    kld_ave = [
+        [sum(k[0]) / len(k[0]), sum(k[1]) / len(k[1]), k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
+    ] 
+
+    for j_idx, j in enumerate([kld_expand, kld_ave]):
+        kld = j
+        j_label = j_labels[j_idx]
+
+        relative_changes = [(i[1] - i[0]) / i[0] for i in kld]
+        avg_relative_change = sum(relative_changes) / len(relative_changes)
+        print(f'Averaged relative change is: {avg_relative_change}')
+        
+        vis.scatter_diff_vs_estimated_diff(
+            [i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld], 
+            save_dir=f'{dir_results}/val/scatter_{"d" if k is kld_d else "e"}_{"r" if j is kld_expand else "i"}_log.png'
+        )
+
+        r2 = vis.scatter_diff_vs_estimated_diff(
+            [i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld], xscale='linear', yscale='linear',
+            save_dir=f'{dir_results}/val/scatter_{"d" if k is kld_d else "e"}_{"r" if j is kld_expand else "i"}_linear.png'
+        )
+
+        if k_label not in results_table:
+            results_table[k_label] = {}
+        results_table[k_label][j_label] = (avg_relative_change, r2) 
+
+df = pd.DataFrame(results_table)
+df.to_csv(f'{dir_results}/val/results_summary_table.csv')
 
 print('End of program.')

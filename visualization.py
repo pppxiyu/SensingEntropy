@@ -540,7 +540,9 @@ def bar_flood_prob(row):
 
 def scatter_diff_vs_estimated_diff(
         kld, kld_estimated, out_file=None, 
-        xscale='log', yscale='log', reg='linear', base=10,):
+        xscale='log', yscale='log', reg='linear', base=10,
+        save_dir=None
+    ):
     import numpy as np
     import os
     from scipy import stats
@@ -589,8 +591,7 @@ def scatter_diff_vs_estimated_diff(
     ax.set_xlabel('KLD 1', fontsize=12)
     ax.set_ylabel('KLD 2', fontsize=12)
 
-    ax.plot(xs, y_line, color='red', linestyle='--', linewidth=2,
-            label='Trend (fitted on transformed x)')
+    ax.plot(xs, y_line, color='red', linestyle='--', linewidth=2)
     
     if xscale == 'log':
         ax.set_xscale('log', base=base)
@@ -609,8 +610,12 @@ def scatter_diff_vs_estimated_diff(
         os.makedirs(os.path.dirname(out_file) or '.', exist_ok=True)
         fig.savefig(out_file, dpi=300)
         print(f'Saved scatter plot to {out_file}')
-    plt.show()
-    return
+
+    if save_dir is not None:
+        fig.savefig(os.path.join(save_dir))
+    else:
+        plt.show()
+    return r2
 
 
 
