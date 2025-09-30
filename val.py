@@ -14,29 +14,33 @@ import pandas as pd
 
 
 road_data = dd.RoadData()
-road_data.load_instance('./cache/instances/road_data')
+road_data.load_instance(f'{dir_cache_instance}/road_data')
 bayes_network_t = mo.TrafficBayesNetwork()
-bayes_network_t.load_instance('./cache/instances/bayes_network_t')
+bayes_network_t.load_instance(f'{dir_cache_instance}/bayes_network_t')
+bayes_network_t_normal = mo.TrafficBayesNetwork()
+load_normal = bayes_network_t_normal.load_instance(f'{dir_cache_instance}/bayes_network_t_normal')
 
-# get traffic data during normal time
-normal_t_data = []
-for i in road_data.flood_time_citywide.copy().drop(
-        road_data.flood_time_citywide.copy().sample(frac=0.8, random_state=df_random_seed).index
-).index:
-    rd_n = dd.RoadData()
-    p = dd.get_period_before_start(road_data.flood_time_citywide.copy().iloc[[i]], 3)
-    d_normal = rd_n.pull_nyc_dot_traffic_flooding(dir_NYC_data_token, select_incidents=p)
-    if d_normal is not None:
-        rd_n.resample_nyc_dot_traffic(rd_n.speed)
-        normal_t_data.append(rd_n.speed_resampled)
+if not load_normal:
+    # get traffic data during normal time
+    normal_t_data = []
+    for i in road_data.flood_time_citywide.copy().drop(
+            road_data.flood_time_citywide.copy().sample(frac=0, random_state=df_random_seed).index
+    ).index:
+        rd_n = dd.RoadData()
+        p = dd.get_period_before_start(road_data.flood_time_citywide.copy().iloc[[i]], 7)
+        d_normal = rd_n.pull_nyc_dot_traffic_flooding(dir_NYC_data_token, select_incidents=p)
+        if d_normal is not None:
+            rd_n.resample_nyc_dot_traffic(rd_n.speed)
+            normal_t_data.append(rd_n.speed_resampled)
 
-# fit priors from normal traffic data
-bayes_network_normal = mo.TrafficBayesNetwork(
-    speed=pd.concat(normal_t_data), road_geo=road_data.geo, 
-    n_samples=10000, n_components=12, 
-    remove_nodes=remove_data_from_nodes, corr_thr=corr_thr,
-)
-bayes_network_normal.fit_marginal_from_data()
+    # fit priors from normal traffic data
+    bayes_network_t_normal = mo.TrafficBayesNetwork(
+        speed=pd.concat(normal_t_data), road_geo=road_data.geo, 
+        n_samples=10000, n_components=12, 
+        remove_nodes=remove_data_from_nodes, corr_thr=corr_thr,
+    )
+    bayes_network_t_normal.fit_marginal_from_data()
+    bayes_network_t_normal.save_instance(f'{dir_cache_instance}/bayes_network_t_normal')
 
 # validate on each incident
 kld_d = []
@@ -91,12 +95,12 @@ for i in road_data.flood_time_citywide.copy().index:
     # compared disruption level 
     true_disruption = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
-        {k: v for k, v in bayes_network_normal.marginals.items() if k in update_locs},  # averaged (normal period)
+        {k: v for k, v in bayes_network_t_normal.marginals.items() if k in update_locs},  # averaged (normal period)
     ], expand=True 
     )
     estimated_disruption = bayes_network_t.calculate_network_kl_divergence([
         {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
-        {k: v for k, v in bayes_network_normal.marginals.items() if k in update_locs},  # averaged (normal period)
+        {k: v for k, v in bayes_network_t_normal.marginals.items() if k in update_locs},  # averaged (normal period)
     ], expand=True 
     )
     kld_d.append([true_disruption, estimated_disruption, update_locs])

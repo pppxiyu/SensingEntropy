@@ -7,6 +7,7 @@ dir_city_boundary = 'data/nyc_boundary/nybb.shp'
 dir_adapted_nyc_roads = 'data/nyc_roads_geometry_corrected.geojson'
 dir_mapbox_token = './data/mapbox_token.txt'
 dir_results = './results'
+dir_cache_instance = './cache/instances'
 
 with open(dir_mapbox_token, "r") as file:
     mapbox_token = file.read()
@@ -17,3 +18,5 @@ remove_data_from_nodes = ['4616195', '4616229', '4616223',]
 sensor_count = 1
 
 corr_thr = .6  # correlation threshold when building the bayesian network
+
+weight_disruption = .5

@@ -618,4 +618,15 @@ def scatter_diff_vs_estimated_diff(
     return r2
 
 
+def scatter_disp_n_supr_w_flood_p(x, y, xlabel="X", ylabel="Y", 
+                 color='blue', size=50, alpha=0.6):
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(x, y, c=color, s=size, alpha=alpha)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    return 
 

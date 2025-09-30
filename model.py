@@ -1729,3 +1729,31 @@ def check_gmr_bn_consistency(node_list: list, joints: dict):
                     marginal = marginalize_gmm(joint, node_index)
                     vis.dist_gmm_1d(marginal, title=node)
 
+
+def process_results(results, weight_disruption):       
+    # Filter out None values and track valid indices
+    valid_results = [(i, k, r) for i, (k, r) in enumerate(results.items()) 
+                    if r['info_gain_disruption_weighted'] is not None]
+
+    if not valid_results:
+        raise ValueError("All disruption values are None")
+
+    _, keys, filtered = zip(*valid_results)
+
+    # Calculate normalized values
+    v_dirp = [r['info_gain_disruption_weighted'] for r in filtered]
+    v_dirp_norm = [(v - min(v_dirp)) / (max(v_dirp) - min(v_dirp)) if max(v_dirp) != min(v_dirp) else 0 for v in v_dirp]
+
+    v_sup = [r['info_gain_suprise'] for r in filtered]
+    v_sup_norm = [(v - min(v_sup)) / (max(v_sup) - min(v_sup)) if max(v_sup) != min(v_sup) else 0 for v in v_sup]
+
+    # Calculate objective and find max
+    v_obj = [d * weight_disruption + s * (1 - weight_disruption) for d, s in zip(v_dirp_norm, v_sup_norm)]
+    max_v_obj = max(v_obj)
+    max_indices = [keys[i] for i, v in enumerate(v_obj) if v == max_v_obj]
+
+    # Get selected roads
+    selected_roads = [results[k]['road'] for k in max_indices]
+
+    return selected_roads, (v_obj, v_dirp_norm, v_sup_norm), valid_results
+
