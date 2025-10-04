@@ -872,11 +872,12 @@ class TrafficBayesNetwork:
         marginals_updated = copy.deepcopy(marginals)
         marginals_fixed = copy.deepcopy(marginals)
         joints_fixed = copy.deepcopy(joints)
+        joints_updated = copy.deepcopy(joints)
         updated_marginals = []
 
         signal_dict = {k: v for k, v in signal_dict.items() if v is not None}
         if not signal_dict:
-            return marginals_updated, joints_fixed
+            raise ValueError('No signal.')
 
         # traverse the graph and record the parents affected by information propagation for each node
         reachable = defaultdict(list)  # records reachable parents by the information propagation
@@ -916,7 +917,7 @@ class TrafficBayesNetwork:
                 if remaining_parents_n[child] > 0:
                     continue  # not all reachable parents are ready
 
-                # update joints and marginals (backup, it can produce updated joints)
+                # update joints and marginals
                 parent_ids, joint_gmm = joints_fixed[child]['parents'], joints_fixed[child]['joints']
                 assert current_node in parent_ids
                 resampled_joint_samples = self.update_joints_multi_variable(
@@ -931,12 +932,15 @@ class TrafficBayesNetwork:
                 marginals_updated[child] = new_child_gmm
                 updated_marginals.append(child)
 
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples)
+                joints_updated[child]['joints'] = new_joint_gmm
+
                 if verbose > 0:
                     print(f"Updated marginal for {child}")
 
                 queue.append(child)
 
-        return marginals_updated, updated_marginals
+        return marginals_updated, updated_marginals, joints_updated
 
     def update_network_with_multiple_soft_evidence_upward(
             self, signal_dict: dict, marginals, joints, verbose=1,
@@ -947,11 +951,12 @@ class TrafficBayesNetwork:
         marginals_updated = copy.deepcopy(marginals)
         marginals_fixed = copy.deepcopy(marginals)
         joints_fixed = copy.deepcopy(joints)
+        joints_updated = copy.deepcopy(joints)
         updated_marginals = []
 
         signal_dict = {k: v for k, v in signal_dict.items() if v is not None}
         if not signal_dict:
-            return marginals_updated, joints_fixed
+            raise ValueError('No signal.')
 
         # traverse the graph and record the parents affected by information propagation for each node
         reachable = defaultdict(list)  # records reachable parents by the information propagation
@@ -1002,6 +1007,9 @@ class TrafficBayesNetwork:
                     [current_node], [current_node] + parent_ids,
                 )
 
+                new_joint_gmm = self._optimal_gmm(resampled_joint_samples)
+                joints_updated[current_node]['joints'] = new_joint_gmm
+
                 # update marginal
                 for p in parent_ids:
                     all_id = [current_node] + parent_ids
@@ -1016,7 +1024,7 @@ class TrafficBayesNetwork:
 
                 queue.append(child)
 
-        return marginals_updated, updated_marginals
+        return marginals_updated, updated_marginals, joints_updated
 
     def update_network_with_multiple_soft_evidence(
             self, signals: list, marginals, joints, verbose=1,
@@ -1027,23 +1035,37 @@ class TrafficBayesNetwork:
         marginal_down = marginals[0]
         marginal_up = marginals[1]
 
-        marginals_down, updated_loc_down = self.update_network_with_multiple_soft_evidence_downward(
+        marginals_down, updated_loc_down, joints_updated_down = self.update_network_with_multiple_soft_evidence_downward(
             signal_down, marginal_down, joints, verbose=verbose
         )
-        marginals_up, updated_loc_up = self.update_network_with_multiple_soft_evidence_upward(
+        marginals_up, updated_loc_up, joints_updated_up = self.update_network_with_multiple_soft_evidence_upward(
             signal_up, marginal_up, joints, verbose=verbose,
         )
-        # combine the updates on two directions
+
+        # combine updated locs
+        locs_updated = {'down': updated_loc_down, 'up': updated_loc_up}
+
+        # combine the updated marginals on two directions
         marginals = marginals_down.copy()
         for l in updated_loc_up:
             marginals[l] = marginals_up[l]
-        # marginals = marginals_up.copy()
 
-        """
-        A function is needed to handle the multi GMM not influenced by the propagation.
-        """
+        # combine the updated joints on two directions
+        joints = joints_updated_down.copy()
+        for l in updated_loc_up:
+            joints[l] = joints_updated_up[l]
 
-        return marginals, {'down': updated_loc_down, 'up': updated_loc_up}
+        # update marginal_up where marginal_down is updated, and vice versa
+        # the marginals at both direction have been updated at the signal locs
+        marginals_up_down = {'down': marginals_down, 'up': marginals_up}
+        marginals_up_down = update_marginal_on_op_direction(
+            marginals_up_down, 
+            {'down': [i for i in updated_loc_down if i not in list(signal_down.keys())], 
+             'up': [i for i in updated_loc_up if i not in list(signal_down.keys())]}, 
+            joints
+        )
+
+        return marginals, locs_updated, joints, marginals_up_down
 
     def calculate_gmm_entropy_approximation(self, gmm):
         samples, _ = gmm.sample(self.n_samples)
@@ -1167,9 +1189,30 @@ class TrafficBayesNetwork:
         if expand == True:
             return divergence_list
 
-    def compress_multi_gmm(self, bn_list: dict):
-        marginals, joints = None, None
-        return marginals, joints
+    @staticmethod
+    def calculate_multi_network_kl_divergence(network_list, verbose=1, label=None):
+        assert len(network_list), 'Divergence is between two networks'
+        network_0, network_1 = network_list[0], network_list[1]  # estimate, ground truth
+        common_keys = network_0.keys() & network_1.keys()
+
+        divergence_list = []
+        computed = False
+        for k in common_keys:
+            divergence_list.append(calculate_kl_divergence_gmm(network_0[k], network_1[k]))
+            computed = True
+        divergence = sum(divergence_list)
+
+        if not computed:
+            warnings.warn('No KL divergence is computed.')
+            return None
+
+        if verbose > 0:
+            if label is not None:
+                print(f"KL divergencey of the two Bayesian Network w. observation {label}: {divergence}")
+            else:
+                print(f"KL divergencey of the two Bayesian Network: {divergence}")
+
+        return divergence
 
     def get_entropy_with_signals(self, bayes_joints, bayes_marginal, signal_dict, if_vis=False):
         entropies = {}
@@ -1625,60 +1668,52 @@ class FloodBayesNetwork:
 
 
 class MultiGaussianMixture:
-    """
-    Pending for check
-    """
-    def __init__(self, gmm_list: list, p_list: list,):
-        self.gmm_list = gmm_list
-        self.p_list = p_list
-
-    def sample(self, n_samples=1):
-        gmm_choices = np.random.choice(
-            len(self.gmm_list), size=n_samples, p=self.p_list
-        )
-
-        # count how many samples per GMM
-        unique, counts = np.unique(gmm_choices, return_counts=True)
+    """A simple wrapper to combine multiple GMMs with probabilities"""
+    
+    def __init__(self, gmms_with_probs):
+        """
+        Args:
+            gmms_with_probs: List of (GaussianMixture, probability) tuples
+        """
+        self.gmms, self.probs = zip(*gmms_with_probs)
+        self.probs = np.array(self.probs)
+        
+        # Validate probabilities sum to 1
+        assert np.isclose(self.probs.sum(), 1.0), f"Probabilities must sum to 1, got {self.probs.sum()}"
+    
+    def sample(self, n_samples):
+        """Sample from the mixture of GMMs"""
+        # Determine how many samples from each GMM based on probabilities
+        n_samples_per_gmm = np.random.multinomial(n_samples, self.probs)
+        
+        # Sample from each GMM
         samples = []
-        # component_choices = []
-
-        # for each GMM, sample in batch
-        for gmm_idx, count in zip(unique, counts):
-            gmm = self.gmm_list[gmm_idx]
-            s_batch, c_batch = gmm.sample(count)
-
-            samples.append(s_batch)
-            # component_choices.extend([(gmm_idx, c) for c in c_batch])
-
-        # Concatenate results
-        samples = np.vstack(samples)
-        # component_choices = np.array(component_choices)
-
-        # reorder samples to match original gmm_choices order
-        reorder_index = np.argsort(np.argsort(np.concatenate([
-            np.repeat(gmm_idx, count) for gmm_idx, count in zip(unique, counts)
-        ])))
-        samples = samples[reorder_index]
-        # component_choices = component_choices[reorder_index]
-
-        return samples
-
+        for gmm, n in zip(self.gmms, n_samples_per_gmm):
+            if n > 0:
+                X, _ = gmm.sample(n)
+                samples.append(X)
+        
+        # Combine all samples
+        X_combined = np.vstack(samples)
+        
+        # Shuffle to mix samples from different GMMs
+        indices = np.random.permutation(len(X_combined))
+        return X_combined[indices], None
+    
     def score_samples(self, X):
-        # for each GMM, compute its weighted density
-        total_density = np.zeros(X.shape[0])
-
-        for p_i, gmm_i in zip(self.p_list, self.gmm_list):
-            # GaussianMixture.score_samples returns log density
-            log_density_i = gmm_i.score_samples(X)
-            density_i = np.exp(log_density_i)
-
-            total_density += p_i * density_i
-
-        # Avoid log(0)
-        total_density = np.maximum(total_density, 1e-300)
-
-        log_total_density = np.log(total_density)
-        return log_total_density
+        from scipy.special import logsumexp
+        """Calculate log probability of samples under the mixture"""
+        # Calculate log prob under each GMM: shape (n_gmms, n_samples)
+        log_probs = np.array([gmm.score_samples(X) for gmm in self.gmms])
+        
+        # Mixture log probability: log(sum(p_i * P_i(x)))
+        # = logsumexp(log(p_i) + log(P_i(x)))
+        log_mixture_prob = logsumexp(
+            log_probs + np.log(self.probs)[:, np.newaxis], 
+            axis=0
+        )
+        
+        return log_mixture_prob
 
 
 def calculate_kl_divergence_gmm(P_gmm, Q_gmm, n_samples=10000):
@@ -1756,4 +1791,84 @@ def process_results(results, weight_disruption):
     selected_roads = [results[k]['road'] for k in max_indices]
 
     return selected_roads, (v_obj, v_dirp_norm, v_sup_norm), valid_results
+
+
+def get_signals(k, v, bayes_network_t, bayes_network_f):
+    inferred_signals_flood = bayes_network_t.convert_state_to_dist(
+        bayes_network_f.infer_node_states(k, 1, 1, 1)
+    )
+    signals = [
+            {**{k: v['speed_flood']}, **inferred_signals_flood[0]},  # downward
+            {**{k: bayes_network_t.signal_upward[k]['speed_flood']}, **inferred_signals_flood[1]},  # upward
+        ]
+    return signals
+
+def update_marginal_on_op_direction(marginals_up_down, locs_updated, joints):
+    """
+    In the downward update, only downward marginals are updated. However, upward marginals at the same loc should 
+    also be updated. The same case for the upward update.
+
+    marginals_up_down: a dict of all marginals for all nodes (some nodes are not updated)
+    locs_updated: a list of updated locs except for the signal locs (take off signal locs before the input)
+    joints: the joints for update
+    """
+    marginals_down = marginals_up_down['down']
+    marginals_up = marginals_up_down['up']
+
+    nodes_updated_by_down = locs_updated['down']
+    nodes_updated_by_up = locs_updated['up']
+
+    for node in nodes_updated_by_down:
+    # process the node updated by downward
+    # the upward marginal of the node should be updated
+    # the upward marginal should be marginalized from the joint labelled by itself
+        gmm = joints[node]['joints']
+        marginals_up[node] = marginalize_gmm(gmm, 0)
+
+    for node in nodes_updated_by_up:
+    # opposite to the comment above
+        for child, info in joints.items():
+            if node in info['parents']:
+                gmm = info['joints']
+                var_order = [child] + info['parents']
+                idx = var_order.index(node)
+                marginals_down[node] = marginalize_gmm(gmm, idx)
+                break
+
+    return [marginals_down, marginals_up]
+
+
+def edit_belief_network_4_results(belief_network_4_results, covered_locs_all):
+    # check and edit belief_network_4_compute
+    # just for keeping main.py clean
+
+    # check
+    assert len(belief_network_4_results) >= 1
+    assert all(t[1] == belief_network_4_results[0][1] for t in belief_network_4_results), "updated locs inconsistent"
+    
+    # norm the p in belief_network_4_compute
+    sum_p = sum([i[2] for i in belief_network_4_results])
+    belief_network_4_results = [(i[0], i[1], i[2] / sum_p) for i in belief_network_4_results]
+    
+    # remove uncovered locs
+    covered_locs_k = [*covered_locs_all, *belief_network_4_results[0][1]['down'], *belief_network_4_results[0][1]['up']]
+    belief_network_4_results = [
+        ({k: v for k, v in t[0].items() if k in covered_locs_k}, t[2])
+        for t in belief_network_4_results
+    ]
+
+    # conver to a dict of [(GMM1, p_1), (GMM_2, p2), .... (GMM_n, p_n)]
+    key_sets = [set(bn_dict.keys()) for bn_dict, _ in belief_network_4_results]
+    assert all(keys == key_sets[0] for keys in key_sets), "Keys are not consistent across all networks"
+    dict_multi_gmm_raw = {}
+    for road in key_sets[0]:
+        dict_multi_gmm_raw[road] = [(bn_dict[road], prob) for bn_dict, prob in belief_network_4_results]
+
+    # convert to a dict of MultiGaussianMixture
+    dict_multi_gmm = {
+        k: MultiGaussianMixture(gmm_list) 
+        for k, gmm_list in dict_multi_gmm_raw.items()
+    }
+
+    return dict_multi_gmm, covered_locs_k
 

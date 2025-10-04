@@ -78,7 +78,7 @@ for i in road_data.flood_time_citywide.copy().index:
     bn_t_test.fit_marginal_from_data()
 
     # estimate using the trained BN
-    marginals_flood, update_loc_f = bayes_network_t.update_network_with_multiple_soft_evidence(
+    marginals_flood, update_loc_f, _, _ = bayes_network_t.update_network_with_multiple_soft_evidence(
         [{**{k: bn_t_test.marginals[k] for k in inundation}},  # signal_down
         {**{k: bn_t_test.marginals[k] for k in inundation}},],  # signal_up
         [bayes_network_t.marginals_downward.copy(), bayes_network_t.marginals_upward.copy()],  # marginals

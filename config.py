@@ -15,7 +15,7 @@ with open(dir_mapbox_token, "r") as file:
 # remove nodes to keep data when alignment, check hte __init__ of TrafficBayesNetwork for details
 remove_data_from_nodes = ['4616195', '4616229', '4616223',]
 
-sensor_count = 1
+sensor_count = 3
 
 corr_thr = .6  # correlation threshold when building the bayesian network
 
