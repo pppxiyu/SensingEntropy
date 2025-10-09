@@ -1716,7 +1716,7 @@ class MultiGaussianMixture:
         return log_mixture_prob
 
 
-def calculate_kl_divergence_gmm(P_gmm, Q_gmm, n_samples=10000):
+def calculate_kl_divergence_gmm(P_gmm, Q_gmm, n_samples=100000):
     X_samples, _ = P_gmm.sample(n_samples)
     log_p = P_gmm.score_samples(X_samples)
     log_q = Q_gmm.score_samples(X_samples)

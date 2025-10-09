@@ -238,13 +238,13 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
 
             new_belief_networks = []
             belief_network_4_results = []
+            signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f)
             for (joints_current, marginals_current, p_current) in belief_networks:
                 
                 # Calculate branch probability
                 p_branch = p_current * v['p_flood']
                 if p_branch >= thr_p:
                     # get updated BN when sensor is on and add to new set of belief networks
-                    signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f)
                     marginals_combined, update_loc_f, joints_updated, marginals_updated = bayes_network_t.update_network_with_multiple_soft_evidence(
                         signals, marginals_current, joints_current, verbose=0
                     )
