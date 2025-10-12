@@ -45,6 +45,8 @@ if not load_normal:
 # validate on each incident
 kld_d = []
 kld_i = []
+all_inundations = []
+all_covered = []
 for i in road_data.flood_time_citywide.copy().index:
 
     # get inundated roads during the incident
@@ -85,12 +87,14 @@ for i in road_data.flood_time_citywide.copy().index:
         bayes_network_t.joints.copy(),  # joints
         verbose=0
     )
+    all_inundations += inundation
 
     # eval
     print(f'Signal locs: {inundation}')
     # update_locs = update_loc_f['down'] + update_loc_f['up']
     update_locs = [i for i in (update_loc_f['down'] + update_loc_f['up']) if i not in inundation]  # remove signal locs
     print(f'All traversed locs: {update_locs}')
+    all_covered += update_locs
 
     # compared disruption level 
     true_disruption = bayes_network_t.calculate_network_kl_divergence([
@@ -118,45 +122,60 @@ for i in road_data.flood_time_citywide.copy().index:
     )
     kld_i.append([error_prior, error_posterior, update_locs])
 
-results_table = {}
-k_labels = ['kld_disruption', 'kld_incident']
-j_labels = ['kld_expand', 'kld_ave']
+# # raw outputs
+# results_table = {}
+# k_labels = ['kld_disruption', 'kld_incident']
+# j_labels = ['kld_expand', 'kld_ave']
+# for k_idx, k in enumerate([kld_d, kld_i]):
+#     kld = k
+#     k_label = k_labels[k_idx]
 
-for k_idx, k in enumerate([kld_d, kld_i]):
-    kld = k
-    k_label = k_labels[k_idx]
+#     kld_expand = [
+#         [v1, v2, k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
+#         for v1, v2 in zip(k[0], k[1]) if v1 is not None and v2 is not None
+#     ]  # no common keys when calculating KL divergence, or no propagated nodes
+#     kld_ave = [
+#         [sum(k[0]) / len(k[0]), sum(k[1]) / len(k[1]), k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
+#     ] 
 
-    kld_expand = [
-        [v1, v2, k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
-        for v1, v2 in zip(k[0], k[1]) if v1 is not None and v2 is not None
-    ]  # no common keys when calculating KL divergence, or no propagated nodes
+#     for j_idx, j in enumerate([kld_expand, kld_ave]):
+#         kld = j
+#         j_label = j_labels[j_idx]
+
+#         relative_changes = [(i[1] - i[0]) / i[0] for i in kld]
+#         avg_relative_change = sum(relative_changes) / len(relative_changes)
+#         print(f'Averaged relative change is: {avg_relative_change}')
+        
+#         vis.scatter_diff_vs_estimated_diff(
+#             [i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld], 
+#             save_dir=f'{dir_results}/val/scatter_{"d" if k is kld_d else "e"}_{"r" if j is kld_expand else "i"}_log.png'
+#         )
+
+#         r2 = vis.scatter_diff_vs_estimated_diff(
+#             [i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld], xscale='linear', yscale='linear',
+#             save_dir=f'{dir_results}/val/scatter_{"d" if k is kld_d else "e"}_{"r" if j is kld_expand else "i"}_linear.png'
+#         )
+
+#         if k_label not in results_table:
+#             results_table[k_label] = {}
+#         results_table[k_label][j_label] = (avg_relative_change, r2) 
+
+# df = pd.DataFrame(results_table)
+# df.to_csv(f'{dir_results}/val/results_summary_table.csv')
+
+# vis output
+for kld, label, x_name, y_name in zip(
+    [kld_d, kld_i], ['d', 'uod'], 
+    ['True disruption ($U$)\nfrom normal-period states', 'True unexpectedness ($UoD$)\nfrom flood-period states'], 
+    ['Estimated disruption ($U$)\nfrom normal-period states', 'Estimated unexpectedness ($UoD$)\nfrom flood-period states']
+):
     kld_ave = [
         [sum(k[0]) / len(k[0]), sum(k[1]) / len(k[1]), k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
     ] 
-
-    for j_idx, j in enumerate([kld_expand, kld_ave]):
-        kld = j
-        j_label = j_labels[j_idx]
-
-        relative_changes = [(i[1] - i[0]) / i[0] for i in kld]
-        avg_relative_change = sum(relative_changes) / len(relative_changes)
-        print(f'Averaged relative change is: {avg_relative_change}')
-        
-        vis.scatter_diff_vs_estimated_diff(
-            [i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld], 
-            save_dir=f'{dir_results}/val/scatter_{"d" if k is kld_d else "e"}_{"r" if j is kld_expand else "i"}_log.png'
-        )
-
-        r2 = vis.scatter_diff_vs_estimated_diff(
-            [i[0] / len(i[2]) for i in kld], [i[1] / len(i[2]) for i in kld], xscale='linear', yscale='linear',
-            save_dir=f'{dir_results}/val/scatter_{"d" if k is kld_d else "e"}_{"r" if j is kld_expand else "i"}_linear.png'
-        )
-
-        if k_label not in results_table:
-            results_table[k_label] = {}
-        results_table[k_label][j_label] = (avg_relative_change, r2) 
-
-df = pd.DataFrame(results_table)
-df.to_csv(f'{dir_results}/val/results_summary_table.csv')
+    vis.scatter_diff_vs_estimated_diff(
+        [i[0] / len(i[2]) for i in kld_ave], [i[1] / len(i[2]) for i in kld_ave], 
+        save_dir=f'{dir_figurs}/scatter_true_vs_estimate_{label}_incident_wise_log.png',
+        x_title=x_name, y_title=y_name
+    )  # val scatter
 
 print('End of program.')
