@@ -470,7 +470,7 @@ def map_road_n_disruption(disruptions, roads_geo, city_shp_path, local_crs="EPSG
     return
 
 
-def dist_gmm_1d(gmm, speed_range=None, title=None, save_dir=None):
+def dist_gmm_1d(gmm, speed_range=None, title=None, save_dir=None, return_y_max=False, y_limit=None):
     import numpy as np
     from scipy.stats import norm
     if speed_range is None:
@@ -497,6 +497,8 @@ def dist_gmm_1d(gmm, speed_range=None, title=None, save_dir=None):
 
     # Set y-axis to start from 0
     ax.set_ylim(bottom=0)
+    if y_limit is not None:
+        ax.set_ylim(0, y_limit)
 
     plt.tight_layout()
     ax.set_aspect(1.0/ax.get_data_ratio(), adjustable='box')  # Make plot area square
@@ -517,10 +519,15 @@ def dist_gmm_1d(gmm, speed_range=None, title=None, save_dir=None):
     else:
         plt.show()
 
-    return
+    if return_y_max:
+        return ax.get_ylim()[1]
 
 
-def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90), z_limit=None, return_z_max=False, save_dir=None):
+def dist_gmm_3d(
+        gmm, segment1=None, segment2=None, 
+        speed_range=(0, 90), z_limit=None, return_z_max=False, save_dir=None,
+        switch_axis=False
+):
     import numpy as np
     from scipy.stats import multivariate_normal
 
@@ -543,6 +550,10 @@ def dist_gmm_3d(gmm, segment1=None, segment2=None, speed_range=(0, 90), z_limit=
         rv = multivariate_normal(mean=mean, cov=cov)
         grid_points = np.dstack((X, Y))
         Z += weight * rv.pdf(grid_points)
+
+    if switch_axis:
+        Z = Z.T
+        segment1, segment2 = segment2, segment1
 
     fig = plt.figure(figsize=(9, 8))
     ax = fig.add_subplot(111, projection='3d')
@@ -828,19 +839,91 @@ def scatter_diff_vs_estimated_diff(
     return r2
 
 
-def scatter_disp_n_supr_w_flood_p(x, y, xlabel="X", ylabel="Y", 
-                 color='blue', size=50, alpha=0.6):
-
-    plt.figure(figsize=(8, 6))
-    plt.scatter(x, y, c=color, s=size, alpha=alpha)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.grid(True, alpha=0.3)
+def scatter_disp_n_supr_w_factors(
+        x, y, xlabel="X", ylabel="Y", 
+        dot_color='#8B6FBF', line_color='#4B3E73',
+        save_dir=None, x_limit=None, y_limit=[-.05, 1.05],
+        show_pvalue=False, legend_loc='upper left'
+):
+    import numpy as np
+    from scipy import stats
+    
+    fig, ax = plt.subplots(figsize=(5, 5))  # Square figure to match
+    
+    # Scatter plot with new color - removed edges
+    ax.scatter(x, y, c=dot_color, s=50, alpha=0.85, edgecolors='none')
+    
+    # Calculate trend line
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    
+    ax.set_xlabel(xlabel, fontsize=20)  # Smaller font
+    ax.set_ylabel(ylabel, fontsize=20)  # Smaller font
+    ax.tick_params(axis='both', which='major', labelsize=14)  # Enlarged tick labels
+    
+    # Set axis limits if provided
+    if x_limit is not None:
+        ax.set_xlim(x_limit)
+    if y_limit is not None:
+        ax.set_ylim(y_limit)
+    
+    # Remove grid (matching dist_gmm_1d style - no grid)
+    ax.grid(False)
+    
     plt.tight_layout()
-    plt.show()
-    return 
-
-
-
-
+    
+    # Adjust left margin to prevent y-axis label cutoff
+    fig.subplots_adjust(left=0.18)
+    
+    ax.set_aspect(1.0/ax.get_data_ratio(), adjustable='box')  # Make plot area square
+    
+    # Thicker spines to match
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.5)
+    
+    # Get axis limits after layout is set
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    
+    # Extend the fitted line to touch the box boundaries
+    y_at_xlim = [slope * xlim[0] + intercept, slope * xlim[1] + intercept]
+    
+    # Plot dashed trend line touching the box
+    ax.plot([xlim[0], xlim[1]], y_at_xlim, color=line_color, linestyle='--', linewidth=2, label='Fitted line', clip_on=False)
+    
+    # Only add p-value if show_pvalue is True
+    if show_pvalue:
+        # Add p-value annotation with italic p
+        if p_value < 0.001:
+            p_text = r'$\it{p}$-value < 0.001'
+        else:
+            p_text = r'$\it{p}$-value = ' + f'{p_value:.3f}'
+        
+        # Create legend with p-value as title in the specified location
+        legend = ax.legend(fontsize=14, frameon=False, loc=legend_loc, 
+                          title=p_text, title_fontsize=14, alignment='left',
+                          facecolor='white', framealpha=0.9)
+    else:
+        # Create legend without p-value in the specified location
+        legend = ax.legend(fontsize=14, frameon=False, loc=legend_loc, 
+                          alignment='left')
+    
+    # Reset limits to ensure they don't change
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    
+    if save_dir is not None:
+        os.makedirs(os.path.dirname(save_dir) or '.', exist_ok=True)
+        fig.savefig(
+            os.path.join(save_dir),
+            dpi=300, 
+            bbox_inches='tight',
+            pad_inches=0.3,  # Increased padding for saving
+            edgecolor='none',
+            transparent=True
+        )
+        print(f'Saved plot to {save_dir}')
+    else:
+        plt.show()
+    
+    return
 

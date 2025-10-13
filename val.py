@@ -174,7 +174,7 @@ for kld, label, x_name, y_name in zip(
     ] 
     vis.scatter_diff_vs_estimated_diff(
         [i[0] / len(i[2]) for i in kld_ave], [i[1] / len(i[2]) for i in kld_ave], 
-        save_dir=f'{dir_figurs}/scatter_true_vs_estimate_{label}_incident_wise_log.png',
+        save_dir=f'{dir_figures}/scatter_true_vs_estimate_{label}_incident_wise_log.png',
         x_title=x_name, y_title=y_name
     )  # val scatter
 

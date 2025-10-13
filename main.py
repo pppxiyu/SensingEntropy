@@ -100,7 +100,7 @@ if not load_t:
 # mo.check_gmr_bn_consistency(list(bayes_network_t.marginals.keys()), bayes_network_t.joints)
 
 
-# visualizations
+# # visualizations
 # vis.map_roads_n_flood(
 #     road_data.geo.to_crs(local_crs), road_data.closures.to_crs(local_crs), buffer=20,
 # )  # flood point and roads
@@ -110,30 +110,30 @@ if not load_t:
 # vis.map_roads_n_values(
 #     road_data.geo, bayes_network_f.marginals.set_index('link_id')['p'].to_dict(), 
 #     local_crs, city_shp_path=dir_city_boundary, y_label='Flood probability', 
-#     save_dir=f'{dir_figurs}/map_flood_p.png',
+#     save_dir=f'{dir_figures}/map_flood_p.png',
 # )  # flood probability map
 
 # vis.map_roads_n_topology(
 #     geo_roads=road_data.geo.copy(),
 #     network=bayes_network_f.network.copy(), network_geo_roads=road_data.geo.copy(),
-#     local_crs=local_crs, city_shp_path=dir_city_boundary, shift=False, save_dir=f'{dir_figurs}/map_flood_bn_topolgy.png',
+#     local_crs=local_crs, city_shp_path=dir_city_boundary, shift=False, save_dir=f'{dir_figures}/map_flood_bn_topolgy.png',
 # )  # flood bayes network edges
 
 # vis.map_roads_n_topology(
 #     geo_roads=road_data.geo.copy(),
 #     network=bayes_network_t.network.copy(), network_geo_roads=road_data.geo.copy(),
-#     local_crs=local_crs, city_shp_path=dir_city_boundary, save_dir=f'{dir_figurs}/map_traffic_bn_topolgy.png',
+#     local_crs=local_crs, city_shp_path=dir_city_boundary, save_dir=f'{dir_figures}/map_traffic_bn_topolgy.png',
 # )  # traffic bayes network edges
 
 # for k, v in list(bayes_network_t.joints.items()):
 #     if k == '4362252':
 #         if len(v['parents']) == 1:  # the vis only support 3d
 #             print(f'Joint distributions at {k}')
-#             vis.dist_gmm_3d(v['joints'], k, v['parents'][0], save_dir=f'{dir_figurs}/dist_joint_4362252')  # joint distributions between roads
+#             vis.dist_gmm_3d(v['joints'], k, v['parents'][0], save_dir=f'{dir_figures}/dist_joint_4362252')  # joint distributions between roads
 
 # for k, v in bayes_network_t.marginals_downward.items():
 #     if k in ['4362252', '4456483']:
-#         vis.dist_gmm_1d(v, save_dir=f'{dir_figurs}/dist_marginal_{k}')  # marginal distributions on roads
+#         vis.dist_gmm_1d(v, save_dir=f'{dir_figures}/dist_marginal_{k}')  # marginal distributions on roads
 
 # for k, v in bayes_network_t.signal_downward.items():
 #     print(f'Distributions under observations at {k}')
@@ -196,67 +196,119 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
         pickle.dump(results_0, f)
 
 # visualizations
-# joints change
-for k in results_0.keys():
-    if k not in ['4616272', '4616329', '4616351']:
-        continue
-    closest_loc_down, closest_loc_up = None, None
-    if results_0[k]['covered_locs_raw']['down']:
-        closest_loc_down_list = [i for i in results_0[k]['covered_locs_raw']['down'] if i != k]
-        if closest_loc_down_list != []:
-            closest_loc_down = closest_loc_down_list[0]
-    if results_0[k]['covered_locs_raw']['up']:
-        closest_loc_up = results_0[k]['covered_locs_raw']['up'][0]
+# # joints change
+# for k in results_0.keys():
+#     if k not in ['4616272', '4616329', '4616351']:
+#         continue
+#     closest_loc_down, closest_loc_up = None, None
+#     if results_0[k]['covered_locs_raw']['down']:
+#         closest_loc_down_list = [i for i in results_0[k]['covered_locs_raw']['down'] if i != k]
+#         if closest_loc_down_list != []:
+#             closest_loc_down = closest_loc_down_list[0]
+#     if results_0[k]['covered_locs_raw']['up']:
+#         closest_loc_up = results_0[k]['covered_locs_raw']['up'][0]
     
-    if closest_loc_down is not None:
-        joints_closest_loc_down = results_0[k]['updated_joints'][closest_loc_down]['joints']
-        z_max = vis.dist_gmm_3d(
-            joints_closest_loc_down, closest_loc_down, k, return_z_max=True,
-            save_dir=f'{dir_figurs}/working_example_{k}/down_updated_joints.png'
-        )  # updated joints
-        vis.dist_gmm_3d(
-            bayes_network_t.joints[closest_loc_down]['joints'], closest_loc_down, k,
-            z_limit=z_max, save_dir=f'{dir_figurs}/working_example_{k}/down_original_joints.png'
-        )  # original joints
-        vis.dist_gmm_1d(
-            results_0[k]['signals'][0][k], save_dir=f'{dir_figurs}/working_example_{k}/down_flood_signal.png'
-        )  # signal resulting in the change
-        # show both positive and negative signal
-        vis.dist_discrete_gmm(bayes_network_t.signal_downward[k], save_dir=f'{dir_figurs}/working_example_{k}/down_signal_both.png')
+#     if closest_loc_down is not None:
+#         vis.dist_discrete_gmm(
+#             bayes_network_t.signal_downward[k], save_dir=f'{dir_figures}/working_example_{k}/down_signal_both.png'
+#         ) # show both positive and negative signal
+#         vis.dist_gmm_1d(
+#             results_0[k]['signals'][0][k], save_dir=f'{dir_figures}/working_example_{k}/down_flood_signal.png'
+#         )  # signal resulting in the change
+#         joints_closest_loc_down = results_0[k]['updated_joints'][closest_loc_down]['joints']
+#         z_max = vis.dist_gmm_3d(
+#             joints_closest_loc_down, closest_loc_down, k, return_z_max=True,
+#             save_dir=f'{dir_figures}/working_example_{k}/down_updated_joints.png', switch_axis=True
+#         )  # updated joints
+#         vis.dist_gmm_3d(
+#             bayes_network_t.joints[closest_loc_down]['joints'], closest_loc_down, k,
+#             z_limit=z_max, save_dir=f'{dir_figures}/working_example_{k}/down_original_joints.png', switch_axis=True
+#         )  # original joints
+#         y_max = vis.dist_gmm_1d(
+#             results_0[k]['updated_marginal_w_direction'][0][closest_loc_down], 
+#             save_dir=f'{dir_figures}/working_example_{k}/down_updated_marginal_{closest_loc_down}.png',
+#             return_y_max=True,
+#         )  # updated marginal of the next node
+#         vis.dist_gmm_1d(
+#             bayes_network_t.marginals_downward[closest_loc_down], 
+#             save_dir=f'{dir_figures}/working_example_{k}/down_original_marginal_{closest_loc_down}.png',
+#             y_limit=y_max,
+#         )  # original marginal of the next node
 
-    if closest_loc_up is not None:
-        joints_closest_loc_up = results_0[k]['updated_joints'][k]['joints']
-        z_max = vis.dist_gmm_3d(
-            joints_closest_loc_up, k, closest_loc_up, return_z_max=True,
-            save_dir=f'{dir_figurs}/working_example_{k}/up_updated_joints.png'
-        )  # updated joints
-        vis.dist_gmm_3d(
-            bayes_network_t.joints[k]['joints'], k, closest_loc_up,
-            z_limit=z_max, save_dir=f'{dir_figurs}/working_example_{k}/up_original_joints.png'
-        )  # original joints
-        vis.dist_gmm_1d(
-            results_0[k]['signals'][1], save_dir=f'{dir_figurs}/working_example_{k}/up_flood_signal.png'
-        )  # signal resulting in the change
-        vis.dist_discrete_gmm(bayes_network_t.signal_upward[k], save_dir=f'{dir_figurs}/working_example_{k}/up_signal_both.png')
-
-    print()
+#     if closest_loc_up is not None:
+#         vis.dist_discrete_gmm(
+#             bayes_network_t.signal_upward[k], save_dir=f'{dir_figures}/working_example_{k}/up_signal_both.png'
+#         )  # show both positive and negative signal
+#         vis.dist_gmm_1d(
+#             results_0[k]['signals'][1], save_dir=f'{dir_figures}/working_example_{k}/up_flood_signal.png', switch_axis=True
+#         )  # signal resulting in the change        
+#         joints_closest_loc_up = results_0[k]['updated_joints'][k]['joints']
+#         z_max = vis.dist_gmm_3d(
+#             joints_closest_loc_up, k, closest_loc_up, return_z_max=True,
+#             save_dir=f'{dir_figures}/working_example_{k}/up_updated_joints.png'
+#         )  # updated joints
+#         vis.dist_gmm_3d(
+#             bayes_network_t.joints[k]['joints'], k, closest_loc_up,
+#             z_limit=z_max, save_dir=f'{dir_figures}/working_example_{k}/up_original_joints.png', switch_axis=True
+#         )  # original joints
+#         y_max = vis.dist_gmm_1d(
+#             results_0[k]['updated_marginal_w_direction'][1][closest_loc_up], 
+#             save_dir=f'{dir_figures}/working_example_{k}/up_updated_marginal_{closest_loc_up}.png',
+#             return_y_max=True,
+#         )  # updated marginal of the next node
+#         vis.dist_gmm_1d(
+#             bayes_network_t.marginals_upward[closest_loc_up], 
+#             save_dir=f'{dir_figures}/working_example_{k}/up_original_marginal_{closest_loc_up}.png',
+#             y_limit=y_max,
+#         )  # original marginal of the next node
 
 selected_roads, (_, v_disruption, v_suprise), processed_results = mo.process_results(results_0, weight_disruption)
 assert len(selected_roads) == 1, 'Just select one in each iteration'
 
 # # the higher the flood p is, the higher the disruption captured is
-# vis.scatter_disp_n_supr_w_flood_p([v[2]['flood_p'] for v in processed_results], v_disruption)
+# vis.scatter_disp_n_supr_w_factors(
+#     [v[2]['flood_p'] for v in processed_results], v_disruption,
+#     xlabel="Flood probability", ylabel="Normalized disruption\n($D$) captured",
+#     save_dir=f'{dir_figures}/scatter_flood_p_n_disruption.png',
+#     dot_color='#6F8ABF', line_color='#243E73',
+# )
 # # the higher the flood p is, the lower the suprise captured is
-# vis.scatter_disp_n_supr_w_flood_p([v[2]['flood_p'] for v in processed_results], v_suprise)
+# vis.scatter_disp_n_supr_w_factors(
+#     [v[2]['flood_p'] for v in processed_results], v_suprise,
+#     xlabel="Flood probability", ylabel="Normalized unexpectedness\n($UoD$) captured",
+#     save_dir=f'{dir_figures}/scatter_flood_p_n_unexpectedness.png',
+#     dot_color='#8B6FBF', line_color='#4B3E73',
+# )
 # # the longer the propagation is, the higher the disruption captured is
-# vis.scatter_disp_n_supr_w_flood_p([len(v[2]['covered_locs']) for v in processed_results], v_disruption)
+# vis.scatter_disp_n_supr_w_factors(
+#     [len(v[2]['covered_locs']) for v in processed_results], v_disruption,
+#     xlabel="Propagation distance\n(# nodes)", ylabel="Normalized disruption\n($D$) captured",
+#     save_dir=f'{dir_figures}/scatter_propagation_dist_n_disruption.png',
+#     dot_color='#6F8ABF', line_color='#243E73', legend_loc='upper right'
+# )
 # # the longer the propagation is, the higher the suprise captured is
-# vis.scatter_disp_n_supr_w_flood_p([len(v[2]['covered_locs']) for v in processed_results], v_suprise)
+# vis.scatter_disp_n_supr_w_factors(
+#     [len(v[2]['covered_locs']) for v in processed_results], v_suprise,
+#     xlabel="Propagation distance\n(# nodes)", ylabel="Normalized unexpectedness\n($UoD$) captured",
+#     save_dir=f'{dir_figures}/scatter_propagation_dist_n_unexpectedness.png',
+#     dot_color='#8B6FBF', line_color='#4B3E73', legend_loc='upper right'
+# )
 # # the stronger the signal is, the higher the disruption captured is
-# vis.scatter_disp_n_supr_w_flood_p([np.mean(v[2]['signal_strength']) for v in processed_results], v_disruption)
+# vis.scatter_disp_n_supr_w_factors(
+#     [np.mean(v[2]['signal_strength']) for v in processed_results], v_disruption,
+#     xlabel="Signal strength\n( $KLD$(prior, signal) )", ylabel="Normalized disruption\n($D$) captured",
+#     save_dir=f'{dir_figures}/scatter_signal_strength_n_disruption.png',
+#     dot_color='#6F8ABF', line_color='#243E73',
+# )
 # # the stronger the signal is, the higher the suprise captured is
-# vis.scatter_disp_n_supr_w_flood_p([np.mean(v[2]['signal_strength']) for v in processed_results], v_suprise)
+# vis.scatter_disp_n_supr_w_factors(
+#     [np.mean(v[2]['signal_strength']) for v in processed_results], v_suprise,
+#     xlabel="Signal strength\n( $KLD$(prior, signal) )", ylabel="Normalized unexpectedness\n($UoD$) captured",
+#     save_dir=f'{dir_figures}/scatter_signal_strength_n_unexpectedness.png',
+#     dot_color='#8B6FBF', line_color='#4B3E73',
+# )
 
+# VoI Map
 # vis.map_roads_n_values(
 #     road_data.geo.copy(), results, city_shp_path=dir_city_boundary
 # )  # FIGURE 6: entropy map

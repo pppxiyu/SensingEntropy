@@ -8,7 +8,7 @@ dir_adapted_nyc_roads = 'data/nyc_roads_geometry_corrected.geojson'
 dir_mapbox_token = './data/mapbox_token.txt'
 dir_results = './results'
 dir_cache_instance = './cache/instances'
-dir_figurs = './figures'
+dir_figures = './figures'
 
 with open(dir_mapbox_token, "r") as file:
     mapbox_token = file.read()
