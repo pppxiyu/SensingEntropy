@@ -33,6 +33,7 @@ class TrafficBayesNetwork:
 
         self.network = None
         self.speed_data = None
+        self.speed_data_raw = None
         self.marginals = None
         self.marginals_downward = None
         self.marginals_upward = None
@@ -46,6 +47,7 @@ class TrafficBayesNetwork:
         self.fitting_mode = fitting_mode
 
         if speed is not None and road_geo is not None:
+            self.speed_data_raw = speed
             self.network = self.build_network_from_geo(
                 road_geo, remove_no_data_segment=speed, correlation_threshold=corr_thr, speed_df=speed
             )
@@ -1029,6 +1031,11 @@ class TrafficBayesNetwork:
     def update_network_with_multiple_soft_evidence(
             self, signals: list, marginals, joints, verbose=1,
     ):
+        # OUTPUTS:
+        # marginals: combined marginals on two directions. A loc only has one marginal
+        # joints: updated joints that could be used as the next BN
+        # marginals_up_down: updated marginals with two directions, that can be used for the next BN
+
         signal_down = signals[0]
         signal_up = signals[1]
 
@@ -1765,32 +1772,35 @@ def check_gmr_bn_consistency(node_list: list, joints: dict):
                     vis.dist_gmm_1d(marginal, title=node)
 
 
-def process_results(results, weight_disruption):       
+def norm_n_weight(results, weight_disruption):       
     # Filter out None values and track valid indices
-    valid_results = [(i, k, r) for i, (k, r) in enumerate(results.items()) 
-                    if r['info_gain_disruption_weighted'] is not None]
-
-    if not valid_results:
-        raise ValueError("All disruption values are None")
-
-    _, keys, filtered = zip(*valid_results)
+    expand_results = [v for _, v in results.items() if v['info_gain_disruption_weighted'] is not None]
 
     # Calculate normalized values
-    v_dirp = [r['info_gain_disruption_weighted'] for r in filtered]
-    v_dirp_norm = [(v - min(v_dirp)) / (max(v_dirp) - min(v_dirp)) if max(v_dirp) != min(v_dirp) else 0 for v in v_dirp]
+    v_dirp = [r['info_gain_disruption_weighted'] for r in expand_results]
+    v_dirp_norm = {k['road']: (v - min(v_dirp)) / (max(v_dirp) - min(v_dirp)) if max(v_dirp) != min(v_dirp) else 0 for v, k in zip(v_dirp, expand_results)}
 
-    v_sup = [r['info_gain_suprise'] for r in filtered]
-    v_sup_norm = [(v - min(v_sup)) / (max(v_sup) - min(v_sup)) if max(v_sup) != min(v_sup) else 0 for v in v_sup]
+    v_sup = [r['info_gain_suprise'] for r in expand_results]
+    v_sup_norm = {k['road']: (v - min(v_sup)) / (max(v_sup) - min(v_sup)) if max(v_sup) != min(v_sup) else 0 for v, k in zip(v_sup, expand_results)}
 
     # Calculate objective and find max
-    v_obj = [d * weight_disruption + s * (1 - weight_disruption) for d, s in zip(v_dirp_norm, v_sup_norm)]
-    max_v_obj = max(v_obj)
-    max_indices = [keys[i] for i, v in enumerate(v_obj) if v == max_v_obj]
+    v_obj = {k['road']: d * weight_disruption + s * (1 - weight_disruption) for d, s, k in zip(v_dirp_norm.values(), v_sup_norm.values(), expand_results)}
+    max_v_obj = max(v_obj.values())
+    selected_road = [k for k, v in v_obj.items() if v == max_v_obj]
+    selected_road = selected_road[0]
 
-    # Get selected roads
-    selected_roads = [results[k]['road'] for k in max_indices]
+    valid_results = {k: v for i, (k, v) in enumerate(results.items())
+                if v['info_gain_disruption_weighted'] is not None}
+    if not valid_results:
+        raise ValueError("All disruption values are None")
+    for k, v in v_dirp_norm.items():
+        valid_results[k]['info_gain_disruption_weighted_normed'] = v
+    for k, v in v_sup_norm.items():
+        valid_results[k]['info_gain_suprise_normed'] = v
+    for k, v in v_obj.items():
+        valid_results[k]['voi'] = v
 
-    return selected_roads, (v_obj, v_dirp_norm, v_sup_norm), valid_results
+    return selected_road, (v_obj, v_dirp_norm, v_sup_norm), valid_results
 
 
 def get_signals(k, v, bayes_network_t, bayes_network_f):
@@ -1838,31 +1848,31 @@ def update_marginal_on_op_direction(marginals_up_down, locs_updated, joints):
     return [marginals_down, marginals_up]
 
 
-def edit_belief_network_4_results(belief_network_4_results, covered_locs_all):
+def edit_belief_network_4_results(marginals_only):
     # check and edit belief_network_4_compute
     # just for keeping main.py clean
 
     # check
-    assert len(belief_network_4_results) >= 1
-    assert all(t[1] == belief_network_4_results[0][1] for t in belief_network_4_results), "updated locs inconsistent"
+    assert len(marginals_only) >= 1
+    assert all(t[1] == marginals_only[0][1] for t in marginals_only), "updated locs inconsistent"
     
     # norm the p in belief_network_4_compute
-    sum_p = sum([i[2] for i in belief_network_4_results])
-    belief_network_4_results = [(i[0], i[1], i[2] / sum_p) for i in belief_network_4_results]
+    sum_p = sum([i[2] for i in marginals_only])
+    marginals_only = [(i[0], i[1], i[2] / sum_p) for i in marginals_only]
     
     # remove uncovered locs
-    covered_locs_k = [*covered_locs_all, *belief_network_4_results[0][1]['down'], *belief_network_4_results[0][1]['up']]
-    belief_network_4_results = [
+    covered_locs_k = [*marginals_only[0][1]['down'], *marginals_only[0][1]['up']]
+    marginals_only = [
         ({k: v for k, v in t[0].items() if k in covered_locs_k}, t[2])
-        for t in belief_network_4_results
+        for t in marginals_only
     ]
 
     # conver to a dict of [(GMM1, p_1), (GMM_2, p2), .... (GMM_n, p_n)]
-    key_sets = [set(bn_dict.keys()) for bn_dict, _ in belief_network_4_results]
+    key_sets = [set(bn_dict.keys()) for bn_dict, _ in marginals_only]
     assert all(keys == key_sets[0] for keys in key_sets), "Keys are not consistent across all networks"
     dict_multi_gmm_raw = {}
     for road in key_sets[0]:
-        dict_multi_gmm_raw[road] = [(bn_dict[road], prob) for bn_dict, prob in belief_network_4_results]
+        dict_multi_gmm_raw[road] = [(bn_dict[road], prob) for bn_dict, prob in marginals_only]
 
     # convert to a dict of MultiGaussianMixture
     dict_multi_gmm = {

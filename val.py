@@ -29,16 +29,17 @@ if not load_normal:
         rd_n = dd.RoadData()
         p = dd.get_period_before_start(road_data.flood_time_citywide.copy().iloc[[i]], 7)
         d_normal = rd_n.pull_nyc_dot_traffic_flooding(dir_NYC_data_token, select_incidents=p)
-        if d_normal is not None:
+        if (d_normal is not None) and (len(d_normal) > 0):
             rd_n.resample_nyc_dot_traffic(rd_n.speed)
             normal_t_data.append(rd_n.speed_resampled)
 
     # fit priors from normal traffic data
     bayes_network_t_normal = mo.TrafficBayesNetwork(
         speed=pd.concat(normal_t_data), road_geo=road_data.geo, 
-        n_samples=10000, n_components=12, 
-        remove_nodes=remove_data_from_nodes, corr_thr=corr_thr,
+        n_samples=10000, n_components=12, corr_thr=corr_thr,
+        remove_nodes=remove_data_from_nodes, 
     )
+    # bayes_network_t_normal.speed_data = pd.concat(normal_t_data)
     bayes_network_t_normal.fit_marginal_from_data()
     bayes_network_t_normal.save_instance(f'{dir_cache_instance}/bayes_network_t_normal')
 

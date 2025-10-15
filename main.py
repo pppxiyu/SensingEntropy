@@ -42,8 +42,8 @@ if not load_r:
 
     # Identify flooding periods from df
     road_data.import_street_flooding(dir_road_closure, local_crs, 20)
-    road_data.infer_flooding_time_citywide(pre_flood_buffer=4, post_flood_buffer=8)
-    road_data.infer_flooding_time_per_road(pre_flood_buffer=4, post_flood_buffer=8)
+    road_data.infer_flooding_time_citywide(pre_flood_buffer=2, post_flood_buffer=8)
+    road_data.infer_flooding_time_per_road(pre_flood_buffer=2, post_flood_buffer=8)
 
     # Pull traffic data in flooding periods
     road_data.pull_nyc_dot_traffic_flooding(
@@ -145,9 +145,12 @@ Placement for Sensor 1
 # Update network with observation for the 1st sensor
 # get records
 try:
-    with open(f"{dir_results}/placement/sensing_{0}.pkl", "rb") as f:
+    with open(f"{dir_results}/placement/sensing_1st_round.pkl", "rb") as f:
         results_0 = pickle.load(f)
-        print(f"Loaded sensing_{0} from disk.")
+        print(f"Loaded sensing_1st_round from disk.")
+    with open(f"{dir_results}/placement/sensing_1.pkl", "rb") as f:
+        sensor_1 = pickle.load(f)
+        print(f"Loaded sensing_1 from disk.")
 except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
     print(f"Loading failed ({e}), continuing with calculation.")
 
@@ -188,12 +191,19 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
                 [{k: v for k, v in marginals_combined.items() if k in covered_locs_k},  normal], label=k
             ),
         }
-        results_0[k]['info_gain_disruption_weighted'] = (results_0[k]['flood_p'] * results_0[k]['info_gain_disruption'] 
-                                                        if results_0[k]['info_gain_disruption'] is not None else None)
-        
+        results_0[k]['info_gain_disruption_weighted'] = (
+            results_0[k]['flood_p'] * results_0[k]['info_gain_disruption'] 
+            if results_0[k]['info_gain_disruption'] is not None else None
+        )
+
+    selected_road, (v_voi, v_disruption, v_suprise), results_0 = mo.norm_n_weight(results_0, weight_disruption)
+    sensor_1 = results_0[selected_road].copy()
+
     os.makedirs(f'{dir_results}/placement', exist_ok=True)
-    with open(f"{dir_results}/placement/sensing_{0}.pkl", "wb") as f:
+    with open(f"{dir_results}/placement/sensing_1st_round.pkl", "wb") as f:
         pickle.dump(results_0, f)
+    with open(f"{dir_results}/placement/sensing_1.pkl", "wb") as f:
+        pickle.dump(sensor_1, f)
 
 # visualizations
 # # joints change
@@ -262,56 +272,66 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
 #             y_limit=y_max,
 #         )  # original marginal of the next node
 
-selected_roads, (_, v_disruption, v_suprise), processed_results = mo.process_results(results_0, weight_disruption)
-assert len(selected_roads) == 1, 'Just select one in each iteration'
+# # VoI Map
+# vis.map_roads_n_values(
+#     road_data.geo.copy()[road_data.geo.copy()['link_id'].isin(bayes_network_t.network.nodes())], v_voi, city_shp_path=dir_city_boundary,
+#     save_dir=f'{dir_figures}/map_voi.png', enlarge_font=True,
+#     y_label='Weighted $VoI$', coord_decimals=2, cmap='cosmic', close_axis=True,
+# )  # VoI map
+# vis.map_roads_n_values(
+#     road_data.geo.copy()[road_data.geo.copy()['link_id'].isin(bayes_network_t.network.nodes())], v_disruption, city_shp_path=dir_city_boundary,
+#     save_dir=f'{dir_figures}/map_d.png', enlarge_font=True,
+#     y_label='Disruption ($D$)', coord_decimals=2, cmap='emerald'
+# )  # VoI map
+# vis.map_roads_n_values(
+#     road_data.geo.copy()[road_data.geo.copy()['link_id'].isin(bayes_network_t.network.nodes())], v_suprise, city_shp_path=dir_city_boundary,
+#     save_dir=f'{dir_figures}/map_uod.png', enlarge_font=True,
+#     y_label='Unexpectedness ($UoD$)', coord_decimals=2, cmap='sapphire', close_axis=True,
+# )  # VoI map
 
+# # Placement insights
 # # the higher the flood p is, the higher the disruption captured is
 # vis.scatter_disp_n_supr_w_factors(
-#     [v[2]['flood_p'] for v in processed_results], v_disruption,
+#     [v[2]['flood_p'] for v in processed_results], list(v_disruption.values()),
 #     xlabel="Flood probability", ylabel="Normalized disruption\n($D$) captured",
 #     save_dir=f'{dir_figures}/scatter_flood_p_n_disruption.png',
-#     dot_color='#6F8ABF', line_color='#243E73',
+#     dot_color='#6F8ABF', line_color='#243E73', 
 # )
 # # the higher the flood p is, the lower the suprise captured is
 # vis.scatter_disp_n_supr_w_factors(
-#     [v[2]['flood_p'] for v in processed_results], v_suprise,
+#     [v[2]['flood_p'] for v in processed_results], list(v_suprise.values()),
 #     xlabel="Flood probability", ylabel="Normalized unexpectedness\n($UoD$) captured",
 #     save_dir=f'{dir_figures}/scatter_flood_p_n_unexpectedness.png',
-#     dot_color='#8B6FBF', line_color='#4B3E73',
+#     dot_color='#8B6FBF', line_color='#4B3E73', 
 # )
 # # the longer the propagation is, the higher the disruption captured is
 # vis.scatter_disp_n_supr_w_factors(
-#     [len(v[2]['covered_locs']) for v in processed_results], v_disruption,
+#     [len(v[2]['covered_locs']) for v in processed_results], list(v_disruption.values()),
 #     xlabel="Propagation distance\n(# nodes)", ylabel="Normalized disruption\n($D$) captured",
 #     save_dir=f'{dir_figures}/scatter_propagation_dist_n_disruption.png',
-#     dot_color='#6F8ABF', line_color='#243E73', legend_loc='upper right'
+#     dot_color='#6F8ABF', line_color='#243E73', legend_loc='upper right', 
 # )
 # # the longer the propagation is, the higher the suprise captured is
 # vis.scatter_disp_n_supr_w_factors(
-#     [len(v[2]['covered_locs']) for v in processed_results], v_suprise,
+#     [len(v[2]['covered_locs']) for v in processed_results], list(v_suprise.values()),
 #     xlabel="Propagation distance\n(# nodes)", ylabel="Normalized unexpectedness\n($UoD$) captured",
 #     save_dir=f'{dir_figures}/scatter_propagation_dist_n_unexpectedness.png',
-#     dot_color='#8B6FBF', line_color='#4B3E73', legend_loc='upper right'
+#     dot_color='#8B6FBF', line_color='#4B3E73', legend_loc='upper right', 
 # )
 # # the stronger the signal is, the higher the disruption captured is
 # vis.scatter_disp_n_supr_w_factors(
-#     [np.mean(v[2]['signal_strength']) for v in processed_results], v_disruption,
+#     [np.mean(v[2]['signal_strength']) for v in processed_results], list(v_disruption.values()),
 #     xlabel="Signal strength\n( $KLD$(prior, signal) )", ylabel="Normalized disruption\n($D$) captured",
 #     save_dir=f'{dir_figures}/scatter_signal_strength_n_disruption.png',
-#     dot_color='#6F8ABF', line_color='#243E73',
+#     dot_color='#6F8ABF', line_color='#243E73', 
 # )
 # # the stronger the signal is, the higher the suprise captured is
 # vis.scatter_disp_n_supr_w_factors(
-#     [np.mean(v[2]['signal_strength']) for v in processed_results], v_suprise,
+#     [np.mean(v[2]['signal_strength']) for v in processed_results], list(v_suprise.values()),
 #     xlabel="Signal strength\n( $KLD$(prior, signal) )", ylabel="Normalized unexpectedness\n($UoD$) captured",
 #     save_dir=f'{dir_figures}/scatter_signal_strength_n_unexpectedness.png',
-#     dot_color='#8B6FBF', line_color='#4B3E73',
+#     dot_color='#8B6FBF', line_color='#4B3E73', 
 # )
-
-# VoI Map
-# vis.map_roads_n_values(
-#     road_data.geo.copy(), results, city_shp_path=dir_city_boundary
-# )  # FIGURE 6: entropy map
 
 
 """
@@ -319,26 +339,24 @@ Placement for multiple sensors
 """
 try:  # try to access info for all other sensors
     with open(f"{dir_results}/placement/sensing_others.pkl", "rb") as f:
-        results_2nd_and_all = pickle.load(f)
+        sensors_2nd_n_all = pickle.load(f)
         print(f"Loaded sensor info except for the 1st one from disk.")
 except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
     print(f"Loading failed ({e}), continuing with calculation.")
-    results_2nd_n_all = []
+    sensors_2nd_n_all = []
     
-    # init 
-    thr_p = min([i['p_flood'] for i in list(bayes_network_t.signal_downward.values())]) * .01
-    first_sensor_info = results_0[selected_roads[0]]
+    # init
+    thr_p = min([i['p_flood'] for i in list(bayes_network_t.signal_downward.values())]) * prune_rate
     
     # iter
     belief_networks = [
-        (first_sensor_info['updated_joints'], first_sensor_info['updated_marginal_w_direction'], first_sensor_info['flood_p']), 
-        (bayes_network_t.joints.copy(), [bayes_network_t.marginals_downward.copy(), bayes_network_t.marginals_upward.copy()], 1 - first_sensor_info['flood_p'])
+        (sensor_1['updated_joints'], sensor_1['updated_marginal_w_direction'], sensor_1['flood_p']), 
+        (bayes_network_t.joints.copy(), [bayes_network_t.marginals_downward.copy(), bayes_network_t.marginals_upward.copy()], 1 - sensor_1['flood_p'])
     ]
-    placed = [first_sensor_info['road']]
-    covered_locs_all = first_sensor_info['covered_locs']
+    placed = [sensor_1['road']]
 
     for n in range(sensor_count - 1):
-        print(f'\nCalculation for the Sensor {n + 1}')
+        print(f'\nCalculation for the Sensor {n + 2}')
         results = {}  # temporary dict for recording
         # iterate all unused locs for placing the next sensor
         for k, v in bayes_network_t.signal_downward.items():
@@ -346,7 +364,7 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
                 continue
 
             new_belief_networks = []
-            belief_network_4_results = []
+            marginals_only = []  # all bn updated by the flooding signal
             signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f)
             for (joints_current, marginals_current, p_current) in belief_networks:
                 
@@ -358,7 +376,7 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
                         signals, marginals_current, joints_current, verbose=0
                     )
                     new_belief_networks.append((joints_updated, marginals_updated, p_branch))
-                    belief_network_4_results.append((marginals_combined, update_loc_f, p_branch))
+                    marginals_only.append((marginals_combined, update_loc_f, p_branch))
 
                 # Calculate branch probability
                 p_branch = p_current * (1 - v['p_flood'])
@@ -367,45 +385,57 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
                     new_belief_networks.append((joints_current, marginals_current, p_branch))
 
             # check and edit belief_network_4_compute
-            belief_network_multi_gmm, covered_locs_k = mo.edit_belief_network_4_results(
-                belief_network_4_results, covered_locs_all)
+            multi_marginals_only, _ = mo.edit_belief_network_4_results(
+                marginals_only, #pending covered_locs_all
+            )
 
             # baseline remains the same
-            prior = {k: v for k, v in bayes_network_t.marginals_downward.copy().items() if k in covered_locs_k}
-            normal = {k: v for k, v in bayes_network_t_normal.marginals.copy().items() if k in covered_locs_k}
+            prior = {
+                k: v for k, v in bayes_network_t.marginals_downward.copy().items() if k in marginals_only[0][1]['down']
+            }
+            prior.update({
+                k: v for k, v in bayes_network_t.marginals_upward.copy().items() if k in marginals_only[0][1]['up']
+            })
+            normal = {
+                k: v for k, v in bayes_network_t_normal.marginals.copy().items() if k in 
+                (marginals_only[0][1]['down'] + marginals_only[0][1]['up'])
+            }
 
-             # record
+            # record
             results[k] = {
                 'road': k,
                 'flood_p': v['p_flood'],
                 'belief_networks': new_belief_networks,
-                'covered_locs_k': covered_locs_k,
+                'covered_locs_all': marginals_only[0][1]['down'] + marginals_only[0][1]['up'], #covered_locs_k,
                 'info_gain_suprise': bayes_network_t.calculate_network_kl_divergence(
-                    [belief_network_multi_gmm, prior], label=k
+                    [multi_marginals_only, prior], label=k
                 ),
                 'info_gain_disruption': bayes_network_t.calculate_network_kl_divergence(
-                    [belief_network_multi_gmm,  normal], label=k
+                    [multi_marginals_only, normal], label=k
                 ),
             }
-            results[k]['info_gain_disruption_weighted'] = (results[k]['flood_p'] * results[k]['info_gain_disruption'] 
-                                                            if results[k]['info_gain_disruption'] is not None else None)
-    
+            results[k]['info_gain_disruption_weighted'] = (
+                results[k]['flood_p'] * results[k]['info_gain_disruption'] 
+                if results[k]['info_gain_disruption'] is not None else None
+            )
+
         # select from the temporary records
-        selected_roads, (_, v_disruption, v_suprise), processed_results = mo.process_results(results, weight_disruption)
-        assert len(selected_roads) == 1, 'Just select one in each iteration'
+        selected_road, _, results = mo.norm_n_weight(results, weight_disruption)
 
         # add the selection to the results_2nd_n_all
-        results_2nd_n_all.append(results[selected_roads[0]])
+        sensors_2nd_n_all.append(results[selected_road])
 
         # update iterates
-        belief_networks = results[selected_roads[0]]['belief_networks']
-        placed.append(results[selected_roads[0]]['road'])
-        covered_locs_all = results[selected_roads[0]]['covered_locs_k']
+        belief_networks = results[selected_road]['belief_networks']
+        placed.append(selected_road)
 
-    # save results except for the 1st one
-    os.makedirs(f'{dir_results}/placement', exist_ok=True)
-    with open(f"{dir_results}/placement/sensing_others.pkl", "wb") as f:
-        pickle.dump(results_2nd_n_all, f)
+    # # save results except for the 1st one
+    # os.makedirs(f'{dir_results}/placement', exist_ok=True)
+    # with open(f"{dir_results}/placement/sensing_others.pkl", "wb") as f:
+    #     pickle.dump(results_2nd_n_all, f)
 
+# vis for opt
+[sensor_1['info_gain_disruption_weighted']] + [i['info_gain_disruption_weighted'] for i in sensors_2nd_n_all]
+[sensor_1['info_gain_suprise']] + [i['info_gain_suprise'] for i in sensors_2nd_n_all]
 
 print('End of program.')

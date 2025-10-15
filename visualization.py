@@ -301,21 +301,22 @@ def map_roads_n_flood(geo_roads, geo_flood, buffer=25):
     return
 
 
-
-
-
-
-
-
 def map_roads_n_values(
         geo_roads, values, local_crs="EPSG:2263",
         shift=True, city_shp_path=None, offset=0.0015,
-        y_label='', save_dir=None,
+        y_label='', save_dir=None, coord_decimals=3,
+        cmap="viridis", max_ticks=6, enlarge_font=True,
+        close_axis=False,
 ):
     import geopandas as gpd
     import os
-    from matplotlib.ticker import FuncFormatter
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
     from pyproj import Transformer
+    import matplotlib as mpl
+    try:
+        import cmasher as cmr
+    except ImportError:
+        pass
 
     fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -333,8 +334,19 @@ def map_roads_n_values(
             axis=1
         )
     roads["value"] = roads['link_id'].map(values)
+    
+    # Handle cmasher colormaps
+    cmap_to_use = cmap
+    if isinstance(cmap, str) and not cmap.startswith('cmr.'):
+        # Check if it's a cmasher colormap (without 'cmr.' prefix)
+        try:
+            cmap_to_use = mpl.colormaps[f'cmr.{cmap}']
+        except (KeyError, AttributeError):
+            # If not found in cmasher, use as is (standard matplotlib colormap)
+            cmap_to_use = cmap
+    
     roads.to_crs(local_crs).plot(
-        ax=ax, column="value", cmap="viridis", linewidth=1.5, legend=True,
+        ax=ax, column="value", cmap=cmap_to_use, linewidth=1.5, legend=True,
         missing_kwds={"color": "#c5c5c5", "label": "no data"},
         legend_kwds={"shrink": 0.6,},
     )
@@ -363,28 +375,46 @@ def map_roads_n_values(
     # Convert axis to longitude/latitude (WGS84)
     def x_formatter(x, pos):
         lon, _ = transformer.transform(x, geo_city.total_bounds[1])
-        return f'{lon:.3f}°'
+        return f'{lon:.{coord_decimals}f}°'
 
     def y_formatter(y, pos):
         _, lat = transformer.transform(geo_city.total_bounds[0], y)
-        return f'{lat:.3f}°'
+        return f'{lat:.{coord_decimals}f}°'
 
+    # Limit number of ticks
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=max_ticks, prune='both'))
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=max_ticks, prune='both'))
+    
     ax.xaxis.set_major_formatter(FuncFormatter(x_formatter))
     ax.yaxis.set_major_formatter(FuncFormatter(y_formatter))
 
+    # Font sizes based on enlarge_font parameter
+    tick_labelsize = 24 if enlarge_font else 12
+    axis_labelsize = 28 if enlarge_font else 14
+    colorbar_labelsize = 32 if enlarge_font else 16
+    colorbar_ticksize = 24 if enlarge_font else 12
+    tick_width = 2.5 if enlarge_font else 1.0
+    tick_length = 10 if enlarge_font else 6
+
     # Enlarge tick labels and add axis labels
-    ax.tick_params(axis='both', which='major', labelsize=18)
-    ax.set_xlabel('Longitude', fontsize=20)
-    ax.set_ylabel('Latitude', fontsize=20)
+    ax.tick_params(axis='both', which='major', labelsize=tick_labelsize)
+    ax.set_xlabel('Longitude', fontsize=axis_labelsize)
+    ax.set_ylabel('Latitude', fontsize=axis_labelsize)
+
+    # Handle close_axis option - make ticks and labels white
+    if close_axis:
+        ax.tick_params(axis='both', colors='white', labelcolor='white')
+        ax.xaxis.label.set_color('white')
+        ax.yaxis.label.set_color('white')
 
     # Colorbar styling with larger fonts
     cax = ax.get_figure().axes[-1]
     for spine in cax.spines.values():
         spine.set_visible(False)
-    cax.tick_params(labelsize=18)  # Enlarged from 16
-    cax.set_ylabel(y_label, fontsize=24)  # Enlarged from 22
+    cax.tick_params(labelsize=colorbar_ticksize)
+    cax.set_ylabel(y_label, fontsize=colorbar_labelsize)
 
-    ax.tick_params(axis='both', which='major', labelsize=18, width=2.0, length=8)
+    ax.tick_params(axis='both', which='major', labelsize=tick_labelsize, width=tick_width, length=tick_length)
     
     plt.tight_layout(pad=.5)
 
