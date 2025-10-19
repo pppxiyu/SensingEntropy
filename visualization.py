@@ -878,7 +878,7 @@ def scatter_disp_n_supr_w_factors(
     import numpy as np
     from scipy import stats
     
-    fig, ax = plt.subplots(figsize=(5, 5))  # Square figure to match
+    fig, ax = plt.subplots(figsize=(5.5, 5))  # Square figure to match
     
     # Scatter plot with new color - removed edges
     ax.scatter(x, y, c=dot_color, s=50, alpha=0.85, edgecolors='none')
@@ -952,6 +952,268 @@ def scatter_disp_n_supr_w_factors(
             transparent=True
         )
         print(f'Saved plot to {save_dir}')
+    else:
+        plt.show()
+    
+    return
+
+
+def line_placement_d_n_uod(
+    y_left, y_right,
+    xlabel="X", ylabel_left="Left Y", ylabel_right="Right Y",
+    color_left="#8B6FBF", color_right='#6F8ABF',
+    linestyle_left="-", linestyle_right="--",
+    x_limit=None, y_limit_left=None, y_limit_right=None,
+    legend_loc='lower left', save_dir=None, y_buffer=0.4
+):
+    """
+    Plot two line curves with dual y-axes on a wide rectangular figure.
+    
+    Parameters:
+    -----------
+    y_left, y_right : array-like
+        Data for left and right y-axes
+    xlabel, ylabel_left, ylabel_right : str
+        Axis labels
+    color_left, color_right : str
+        Line colors
+    linestyle_left, linestyle_right : str
+        Line styles
+    x_limit, y_limit_left, y_limit_right : tuple or None
+        Axis limits (min, max)
+    legend_loc : str or int
+        Legend position ('upper left', 'lower right', 'best', etc.)
+    save_dir : str or None
+        Path to save figure
+    y_buffer : float
+        Y-axis padding factor (default 0.4 = 40%)
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import os
+
+    # Convert to numpy arrays
+    y_left = np.array(y_left, dtype=float)
+    y_right = np.array(y_right, dtype=float)
+
+    # Ensure equal length
+    if len(y_left) != len(y_right):
+        raise ValueError("y_left and y_right must have the same length.")
+
+    # Auto-generate x values
+    x = np.arange(len(y_left)) + 1
+
+    # Wide rectangular figure
+    fig, ax_left = plt.subplots(figsize=(12, 3.75))
+    ax_right = ax_left.twinx()
+
+    # Plot both curves with markers
+    line_left, = ax_left.plot(
+        x, y_left, color=color_left, linestyle=linestyle_left,
+        linewidth=2.5, marker='o', markersize=6, label=ylabel_left
+    )
+    line_right, = ax_right.plot(
+        x, y_right, color=color_right, linestyle=linestyle_right,
+        linewidth=2.5, marker='o', markersize=6, label=ylabel_right
+    )
+
+    # Axis labels
+    ax_left.set_xlabel(xlabel, fontsize=20, color='black')
+    ax_left.set_ylabel(ylabel_left, fontsize=20, color='black')
+    ax_right.set_ylabel(ylabel_right, fontsize=20, color='black')
+
+    # Tick label style
+    ax_left.tick_params(axis='both', which='major', labelsize=14, colors='black')
+    ax_right.tick_params(axis='both', which='major', labelsize=14, colors='black')
+
+    # Axis limits with padding
+    if x_limit is not None:
+        ax_left.set_xlim(x_limit)
+
+    if y_limit_left is None:
+        y_min, y_max = np.min(y_left), np.max(y_left)
+        pad = (y_max - y_min) * y_buffer or y_buffer
+        ax_left.set_ylim(y_min - pad, y_max + pad)
+    else:
+        ax_left.set_ylim(y_limit_left)
+
+    if y_limit_right is None:
+        y_min, y_max = np.min(y_right), np.max(y_right)
+        pad = (y_max - y_min) * y_buffer or y_buffer
+        ax_right.set_ylim(y_min - pad, y_max + pad)
+    else:
+        ax_right.set_ylim(y_limit_right)
+
+    # Styling
+    ax_left.grid(False)
+    ax_right.grid(False)
+    for ax in [ax_left, ax_right]:
+        for spine in ax.spines.values():
+            spine.set_linewidth(1.5)
+
+    ax_left.set_aspect('auto', adjustable='datalim')
+    fig.subplots_adjust(left=0.15, right=0.85, top=0.92, bottom=0.18)
+
+    # Horizontal legend
+    clean_label_left = ylabel_left.replace("\n", " ")
+    clean_label_right = ylabel_right.replace("\n", " ")
+
+    lines = [line_left, line_right]
+    labels = [clean_label_left, clean_label_right]
+    
+    valid_locations = {
+        'best': 0, 'upper right': 1, 'upper left': 2, 'lower left': 3,
+        'lower right': 4, 'right': 5, 'center left': 6, 'center right': 7,
+        'lower center': 8, 'upper center': 9, 'center': 10
+    }
+    
+    if isinstance(legend_loc, str):
+        loc = legend_loc.lower() if legend_loc.lower() in valid_locations else 'lower left'
+    elif isinstance(legend_loc, int) and 0 <= legend_loc <= 10:
+        loc = legend_loc
+    else:
+        loc = 'lower left'
+    
+    ax_left.legend(lines, labels, fontsize=14, frameon=False,
+                   loc=loc, alignment='left', ncol=2)
+
+    # Save or display
+    if save_dir is not None:
+        os.makedirs(os.path.dirname(save_dir) or '.', exist_ok=True)
+        fig.savefig(
+            save_dir, dpi=300, bbox_inches='tight',
+            pad_inches=0.3, transparent=True
+        )
+        print(f"Saved plot to {save_dir}")
+    else:
+        plt.show()
+
+    return
+
+
+def line_multi_strategy(
+    y_data_list,
+    labels,
+    xlabel="X", ylabel_left="Y",
+    colors=None, linestyles=None,
+    x_limit=None, y_limit=None,
+    legend_loc='lower right', save_dir=None, y_buffer=0.4
+):
+    """
+    Plot multiple line curves with a single y-axis on a wide rectangular figure.
+    
+    Parameters:
+    -----------
+    y_data_list : list of array-like
+        List of data series to plot (each will be a separate line)
+    labels : list of str
+        Legend labels for each line
+    xlabel, ylabel_left : str
+        Axis labels
+    colors : list of str or None
+        Line colors. If None, uses default color cycle
+    linestyles : list of str or None
+        Line styles. If None, uses dashed lines for all
+    x_limit, y_limit : tuple or None
+        Axis limits (min, max)
+    legend_loc : str or int
+        Legend position ('upper left', 'lower right', 'best', etc.)
+    save_dir : str or None
+        Path to save figure
+    y_buffer : float
+        Y-axis padding factor (default 0.4 = 40%)
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import os
+
+    # Default colors and linestyles
+    if colors is None:
+        colors = ['#6F8ABF', '#BF6F8A', '#8ABF6F', '#BF8A6F', '#6FBF8A']
+    if linestyles is None:
+        linestyles = ['--'] * len(y_data_list)  # All dashed
+    
+    # Convert to numpy arrays
+    y_data_list = [np.array(y, dtype=float) for y in y_data_list]
+    
+    # Ensure all have the same length
+    lengths = [len(y) for y in y_data_list]
+    if len(set(lengths)) > 1:
+        raise ValueError("All y data series must have the same length.")
+    
+    # Auto-generate x values
+    x = np.arange(lengths[0]) + 1
+    
+    # Wide rectangular figure
+    fig, ax = plt.subplots(figsize=(12, 3.75))
+    
+    # Plot all curves with markers
+    lines = []
+    for i, y_data in enumerate(y_data_list):
+        color = colors[i % len(colors)]
+        linestyle = linestyles[i % len(linestyles)]
+        label = labels[i] if i < len(labels) else f"Strategy {i+1}"
+        
+        line, = ax.plot(
+            x, y_data, color=color, linestyle=linestyle,
+            linewidth=2.5, marker='o', markersize=6, label=label
+        )
+        lines.append(line)
+    
+    # Axis labels
+    ax.set_xlabel(xlabel, fontsize=20, color='black')
+    ax.set_ylabel(ylabel_left, fontsize=20, color='black')
+    
+    # Tick label style
+    ax.tick_params(axis='both', which='major', labelsize=14, colors='black')
+    
+    # Axis limits with padding
+    if x_limit is not None:
+        ax.set_xlim(x_limit)
+    
+    if y_limit is None:
+        all_y = np.concatenate(y_data_list)
+        y_min, y_max = np.min(all_y), np.max(all_y)
+        pad = (y_max - y_min) * y_buffer or y_buffer
+        ax.set_ylim(y_min - pad, y_max + pad)
+    else:
+        ax.set_ylim(y_limit)
+    
+    # Styling
+    ax.grid(False)
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.5)
+    
+    ax.set_aspect('auto', adjustable='datalim')
+    fig.subplots_adjust(left=0.15, right=0.85, top=0.92, bottom=0.18)
+    
+    # Horizontal legend
+    clean_labels = [label.replace("\n", " ") for label in labels[:len(y_data_list)]]
+    
+    valid_locations = {
+        'best': 0, 'upper right': 1, 'upper left': 2, 'lower left': 3,
+        'lower right': 4, 'right': 5, 'center left': 6, 'center right': 7,
+        'lower center': 8, 'upper center': 9, 'center': 10
+    }
+    
+    if isinstance(legend_loc, str):
+        loc = legend_loc.lower() if legend_loc.lower() in valid_locations else 'lower right'
+    elif isinstance(legend_loc, int) and 0 <= legend_loc <= 10:
+        loc = legend_loc
+    else:
+        loc = 'lower right'
+    
+    ax.legend(lines, clean_labels, fontsize=14, frameon=False,
+              loc=loc, alignment='left', ncol=len(y_data_list))
+    
+    # Save or display
+    if save_dir is not None:
+        os.makedirs(os.path.dirname(save_dir) or '.', exist_ok=True)
+        fig.savefig(
+            save_dir, dpi=300, bbox_inches='tight',
+            pad_inches=0.3, transparent=True
+        )
+        print(f"Saved plot to {save_dir}")
     else:
         plt.show()
     

@@ -1181,6 +1181,8 @@ class TrafficBayesNetwork:
             divergence_list.append(calculate_kl_divergence_gmm(network_0[k], network_1[k]))
             computed = True
         divergence = sum(divergence_list)
+        if divergence < 1e-8:
+            divergence = 0.0
 
         if not computed:
             warnings.warn('No KL divergence is computed.')
@@ -1686,7 +1688,8 @@ class MultiGaussianMixture:
         self.probs = np.array(self.probs)
         
         # Validate probabilities sum to 1
-        assert np.isclose(self.probs.sum(), 1.0), f"Probabilities must sum to 1, got {self.probs.sum()}"
+        # This could be violated due to the filtering out low probability cases
+        assert np.isclose(self.probs.sum(), 1.0, rtol=1e-3, atol=1e-3), f"Probabilities must sum to 1, got {self.probs.sum()}"
     
     def sample(self, n_samples):
         """Sample from the mixture of GMMs"""
@@ -1772,16 +1775,26 @@ def check_gmr_bn_consistency(node_list: list, joints: dict):
                     vis.dist_gmm_1d(marginal, title=node)
 
 
-def norm_n_weight(results, weight_disruption):       
+def norm_n_weight(results, weight_disruption, pre_defined_norm_bounds=None):     
+    # get norm bounds if pre-defined
+    if pre_defined_norm_bounds is not None:
+        d_min, d_max, uod_min, uod_max = pre_defined_norm_bounds
+
     # Filter out None values and track valid indices
     expand_results = [v for _, v in results.items() if v['info_gain_disruption_weighted'] is not None]
 
     # Calculate normalized values
     v_dirp = [r['info_gain_disruption_weighted'] for r in expand_results]
-    v_dirp_norm = {k['road']: (v - min(v_dirp)) / (max(v_dirp) - min(v_dirp)) if max(v_dirp) != min(v_dirp) else 0 for v, k in zip(v_dirp, expand_results)}
-
+    if pre_defined_norm_bounds is None:
+        v_dirp_norm = {k['road']: (v - min(v_dirp)) / (max(v_dirp) - min(v_dirp)) if max(v_dirp) != min(v_dirp) else 0 for v, k in zip(v_dirp, expand_results)}
+    else:
+        v_dirp_norm = {k['road']: (v - d_min) / (d_max - d_min) if d_max != d_min else 0 for v, k in zip(v_dirp, expand_results)}
+    
     v_sup = [r['info_gain_suprise'] for r in expand_results]
-    v_sup_norm = {k['road']: (v - min(v_sup)) / (max(v_sup) - min(v_sup)) if max(v_sup) != min(v_sup) else 0 for v, k in zip(v_sup, expand_results)}
+    if pre_defined_norm_bounds is None:
+        v_sup_norm = {k['road']: (v - min(v_sup)) / (max(v_sup) - min(v_sup)) if max(v_sup) != min(v_sup) else 0 for v, k in zip(v_sup, expand_results)}
+    else:
+        v_sup_norm = {k['road']: (v - uod_min) / (uod_max - uod_min) if uod_max != uod_min else 0 for v, k in zip(v_sup, expand_results)}
 
     # Calculate objective and find max
     v_obj = {k['road']: d * weight_disruption + s * (1 - weight_disruption) for d, s, k in zip(v_dirp_norm.values(), v_sup_norm.values(), expand_results)}
@@ -1800,7 +1813,7 @@ def norm_n_weight(results, weight_disruption):
     for k, v in v_obj.items():
         valid_results[k]['voi'] = v
 
-    return selected_road, (v_obj, v_dirp_norm, v_sup_norm), valid_results
+    return selected_road, valid_results
 
 
 def get_signals(k, v, bayes_network_t, bayes_network_f):
@@ -1848,7 +1861,7 @@ def update_marginal_on_op_direction(marginals_up_down, locs_updated, joints):
     return [marginals_down, marginals_up]
 
 
-def edit_belief_network_4_results(marginals_only):
+def edit_marginals_only(marginals_only):
     # check and edit belief_network_4_compute
     # just for keeping main.py clean
 
@@ -1867,18 +1880,47 @@ def edit_belief_network_4_results(marginals_only):
         for t in marginals_only
     ]
 
+    # convert to a dict of MultiGaussianMixture
+    dict_multi_gmm = convert_gmms_to_multi_gmms(marginals_only)
+
+    return dict_multi_gmm
+
+
+def edit_belief_networks(belief_networks, down_loc, up_loc):
+    # format
+    belief_networks_marginals_down = [(
+        dict(filter(lambda item: item[0] in  down_loc, i[1][0].items())),
+        i[2],
+    ) for i in belief_networks]
+    belief_networks_marginals_up = [(
+        dict(filter(lambda item: item[0] in up_loc, i[1][1].items())),
+        i[2],
+    ) for i in belief_networks]
+    
+    belief_networks_marginals_combined = [(i[0] | j[0], i[1]) for i, j 
+                                          in zip(belief_networks_marginals_down, belief_networks_marginals_up)]
+    multi_belief_networks_marginals = convert_gmms_to_multi_gmms(belief_networks_marginals_combined)
+    return multi_belief_networks_marginals
+
+
+def convert_gmms_to_multi_gmms(marginals):
     # conver to a dict of [(GMM1, p_1), (GMM_2, p2), .... (GMM_n, p_n)]
-    key_sets = [set(bn_dict.keys()) for bn_dict, _ in marginals_only]
+    key_sets = [set(bn_dict.keys()) for bn_dict, _ in marginals]
     assert all(keys == key_sets[0] for keys in key_sets), "Keys are not consistent across all networks"
     dict_multi_gmm_raw = {}
     for road in key_sets[0]:
-        dict_multi_gmm_raw[road] = [(bn_dict[road], prob) for bn_dict, prob in marginals_only]
+        dict_multi_gmm_raw[road] = [(bn_dict[road], prob) for bn_dict, prob in marginals]
 
     # convert to a dict of MultiGaussianMixture
     dict_multi_gmm = {
         k: MultiGaussianMixture(gmm_list) 
         for k, gmm_list in dict_multi_gmm_raw.items()
     }
+    return dict_multi_gmm
 
-    return dict_multi_gmm, covered_locs_k
+
+def safe_subtract(a, b):
+    if a is None or b is None:
+        return None
+    return a - b
 
