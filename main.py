@@ -63,7 +63,7 @@ if not load_f:
     bayes_network_f.fit_marginal(road_data.closures)
 
     # Fit conditionals - flood
-    bayes_network_f.build_network_by_co_occurrence(road_data.closures, weight_thr=0.2)
+    bayes_network_f.build_network_by_co_occurrence(road_data.closures, weight_thr=weight_thr)
     bayes_network_f.fit_conditional(road_data.closures)
     bayes_network_f.build_bayes_network()
 
@@ -158,7 +158,7 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
     results_0 = {}
     for k, v in bayes_network_t.signal_downward.items():
         # signals
-        signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f)
+        signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f, thr_flood, thr_not_flood)
         
         # update
         marginals_combined, update_loc_f, joints_flood, marginals_flood = bayes_network_t.update_network_with_multiple_soft_evidence(
@@ -376,7 +376,7 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
 
             new_belief_networks = []
             marginals_only = []  # all bn updated by the flooding signal
-            signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f)
+            signals = mo.get_signals(k, v, bayes_network_t, bayes_network_f, thr_flood, thr_not_flood)
             for (joints_current, marginals_current, p_current) in belief_networks:
                 
                 # Calculate branch probability
@@ -489,16 +489,21 @@ Visualizations
 # """
 # all_sensor = [sensor_1] + sensors_2nd_n_all
 # rank_by_flood_p = sorted(all_sensor, key=lambda x: x['flood_p'], reverse=True)
-# rank_by_traffic = [
+# all_sensor_traffic = [
 #     {'road': i, 'speed': road_data.speed_resampled[road_data.speed_resampled['link_id'] == i]['speed'].mean(), 'voi':j} 
 #     for i, j in [(i['road'], i['voi']) for i in all_sensor]
 # ]
-# rank_by_traffic = sorted(rank_by_traffic, key=lambda x: x['speed'], reverse=False)
+# rank_by_traffic = sorted(all_sensor_traffic, key=lambda x: x['speed'], reverse=False)
+# all_sensor_traffic_impact = [
+#     {'road': i['road'], 'impact': i['speed'] * j['flood_p'], 'voi': j['voi']} 
+#     for i, j in zip(all_sensor_traffic, all_sensor)]
+# rank_by_traffic_impact = sorted(all_sensor_traffic_impact, key=lambda x: x['impact'], reverse=True)
 # vis.line_multi_strategy([
 #         np.cumsum([sensor_1['voi']] + [i['voi'] for i in sensors_2nd_n_all]).tolist(),
 #         np.cumsum([i['voi'] for i in rank_by_flood_p]).tolist(),
 #         np.cumsum([i['voi'] for i in rank_by_traffic]).tolist(),
-#     ], ['Priorting $VoI$', 'Priorting flood probability', 'Priorting traffic volume'],
+#         np.cumsum([i['voi'] for i in rank_by_traffic_impact]).tolist(),
+#     ], ['Prioritizing $VoI$', 'Prioritizing flood probability', 'Prioritizing traffic volume', 'Prioritizing traffic disruption'],
 #     xlabel=r"The $n^{th}$ sensing", ylabel_left="\n$VoI$ captured",
 #     save_dir=f'{dir_figures}/line_multi-strategy.png', y_buffer=0.1
 # )

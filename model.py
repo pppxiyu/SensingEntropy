@@ -1816,9 +1816,9 @@ def norm_n_weight(results, weight_disruption, pre_defined_norm_bounds=None):
     return selected_road, valid_results
 
 
-def get_signals(k, v, bayes_network_t, bayes_network_f):
+def get_signals(k, v, bayes_network_t, bayes_network_f, thr_flood, thr_not_flood):
     inferred_signals_flood = bayes_network_t.convert_state_to_dist(
-        bayes_network_f.infer_node_states(k, 1, 1, 1)
+        bayes_network_f.infer_node_states(k, 1, thr_flood, thr_not_flood)
     )
     signals = [
             {**{k: v['speed_flood']}, **inferred_signals_flood[0]},  # downward

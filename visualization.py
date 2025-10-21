@@ -1129,7 +1129,7 @@ def line_multi_strategy(
 
     # Default colors and linestyles
     if colors is None:
-        colors = ['#6F8ABF', '#BF6F8A', '#8ABF6F', '#BF8A6F', '#6FBF8A']
+        colors = ['#6F8ABF', '#BF6F8A', '#8ABF6F', '#BF8A6F']
     if linestyles is None:
         linestyles = ['--'] * len(y_data_list)  # All dashed
     
@@ -1187,7 +1187,7 @@ def line_multi_strategy(
     ax.set_aspect('auto', adjustable='datalim')
     fig.subplots_adjust(left=0.15, right=0.85, top=0.92, bottom=0.18)
     
-    # Horizontal legend
+    # Vertical legend (one item per row)
     clean_labels = [label.replace("\n", " ") for label in labels[:len(y_data_list)]]
     
     valid_locations = {
@@ -1203,8 +1203,9 @@ def line_multi_strategy(
     else:
         loc = 'lower right'
     
+    # Changed ncol=1 to stack items vertically
     ax.legend(lines, clean_labels, fontsize=14, frameon=False,
-              loc=loc, alignment='left', ncol=len(y_data_list))
+              loc=loc, alignment='left', ncol=1)
     
     # Save or display
     if save_dir is not None:

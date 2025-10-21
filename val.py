@@ -164,19 +164,19 @@ for i in road_data.flood_time_citywide.copy().index:
 # df = pd.DataFrame(results_table)
 # df.to_csv(f'{dir_results}/val/results_summary_table.csv')
 
-# vis output
-for kld, label, x_name, y_name in zip(
-    [kld_d, kld_i], ['d', 'uod'], 
-    ['True disruption ($U$)\nfrom normal-period states', 'True unexpectedness ($UoD$)\nfrom flood-period states'], 
-    ['Estimated disruption ($U$)\nfrom normal-period states', 'Estimated unexpectedness ($UoD$)\nfrom flood-period states']
-):
-    kld_ave = [
-        [sum(k[0]) / len(k[0]), sum(k[1]) / len(k[1]), k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
-    ] 
-    vis.scatter_diff_vs_estimated_diff(
-        [i[0] / len(i[2]) for i in kld_ave], [i[1] / len(i[2]) for i in kld_ave], 
-        save_dir=f'{dir_figures}/scatter_true_vs_estimate_{label}_incident_wise_log.png',
-        x_title=x_name, y_title=y_name
-    )  # val scatter
+# # vis output
+# for kld, label, x_name, y_name in zip(
+#     [kld_d, kld_i], ['d', 'uod'], 
+#     ['True disruption ($U$)\nfrom normal-period states', 'True unexpectedness ($UoD$)\nfrom flood-period states'], 
+#     ['Estimated disruption ($U$)\nfrom normal-period states', 'Estimated unexpectedness ($UoD$)\nfrom flood-period states']
+# ):
+#     kld_ave = [
+#         [sum(k[0]) / len(k[0]), sum(k[1]) / len(k[1]), k[2]] for k in kld if (k[0] is not None and k[1] is not None) 
+#     ] 
+#     vis.scatter_diff_vs_estimated_diff(
+#         [i[0] / len(i[2]) for i in kld_ave], [i[1] / len(i[2]) for i in kld_ave], 
+#         save_dir=f'{dir_figures}/scatter_true_vs_estimate_{label}_incident_wise_log.png',
+#         x_title=x_name, y_title=y_name
+#     )  # val scatter
 
 print('End of program.')
