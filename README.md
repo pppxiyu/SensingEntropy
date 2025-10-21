@@ -37,7 +37,9 @@ Visualization
 ├── visualization.py       # Plotting and visualization functions
 Data and output folders
 ├── data/                  # Data directory
-│   ├── nyc_street_flooding_20250218.csv (obtained from NYC OpenData)
+│   ├── nyc_street_flooding_20250218.csv (download from 
+│       https://data.cityofnewyork.us/Social-Services/Street-Flooding/wymi-u6i8/about_data 
+│       and name it as shown here)
 │   ├── nyc_roads_geometry_corrected.geojson (adapted from NYC OpenData)
 │   └── nyc_boundary/ (shp file, only for visualizatin)
 │   └── nyc_opendata_token.txt (must-have but not included in repo, please use your own NYCOpenData token)
