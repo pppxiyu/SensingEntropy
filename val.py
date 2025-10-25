@@ -44,8 +44,7 @@ if not load_normal:
     bayes_network_t_normal.save_instance(f'{dir_cache_instance}/bayes_network_t_normal')
 
 # validate on each incident
-kld_d = []
-kld_i = []
+kld_d, kld_u, kld_i = [], [], []
 all_inundations = []
 all_covered = []
 for i in road_data.flood_time_citywide.copy().index:
@@ -123,6 +122,19 @@ for i in road_data.flood_time_citywide.copy().index:
     )
     kld_i.append([error_prior, error_posterior, update_locs])
 
+    # compared unexpectedness (without flood belief)
+    true_unexpectedness = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in bn_t_test.marginals.items() if k in update_locs},  # incident 
+        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged (flood period)
+    ], expand=True 
+    )
+    estimated_unexpectedness = bayes_network_t.calculate_network_kl_divergence([
+        {k: v for k, v in marginals_flood.items() if k in update_locs},  # estimate
+        {k: v for k, v in bayes_network_t.marginals_downward.items() if k in update_locs},  # averaged (flood period)
+    ], expand=True  
+    )
+    kld_u.append([true_unexpectedness, estimated_unexpectedness, update_locs])
+
 # # raw outputs
 # results_table = {}
 # k_labels = ['kld_disruption', 'kld_incident']
@@ -165,8 +177,12 @@ for i in road_data.flood_time_citywide.copy().index:
 # df.to_csv(f'{dir_results}/val/results_summary_table.csv')
 
 # # vis output
+# valid_indices = [i for i in range(len(kld_u)) 
+#                  if kld_d[i][0] is not None and kld_d[i][1] is not None 
+#                  and kld_u[i][0] is not None and kld_u[i][1] is not None]
+# kld_used = [[kld_d[i] for i in valid_indices], [kld_u[i] for i in valid_indices]]
 # for kld, label, x_name, y_name in zip(
-#     [kld_d, kld_i], ['d', 'uod'], 
+#     kld_used, ['d', 'uod'], 
 #     ['True disruption ($U$)\nfrom normal-period states', 'True unexpectedness ($UoD$)\nfrom flood-period states'], 
 #     ['Estimated disruption ($U$)\nfrom normal-period states', 'Estimated unexpectedness ($UoD$)\nfrom flood-period states']
 # ):

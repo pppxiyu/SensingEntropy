@@ -399,12 +399,12 @@ except (FileNotFoundError, pickle.UnpicklingError, EOFError) as e:
             multi_marginals_only = mo.edit_marginals_only(marginals_only,)
 
             # baseline remains the same
-            prior = {
-                k: v for k, v in bayes_network_t.marginals_downward.copy().items() if k in marginals_only[0][1]['down']
-            }
-            prior.update({
-                k: v for k, v in bayes_network_t.marginals_upward.copy().items() if k in marginals_only[0][1]['up']
-            })
+            # prior = {
+            #     k: v for k, v in bayes_network_t.marginals_downward.copy().items() if k in marginals_only[0][1]['down']
+            # }
+            # prior.update({
+            #     k: v for k, v in bayes_network_t.marginals_upward.copy().items() if k in marginals_only[0][1]['up']
+            # })
             normal = {
                 k: v for k, v in bayes_network_t_normal.marginals.copy().items() if k in 
                 (marginals_only[0][1]['down'] + marginals_only[0][1]['up'])
