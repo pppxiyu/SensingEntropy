@@ -308,6 +308,7 @@ def map_roads_n_values(
         cmap="viridis", max_ticks=6, enlarge_font=True,
         close_axis=False,
 ):
+    import pandas as pd
     import geopandas as gpd
     import os
     from matplotlib.ticker import FuncFormatter, MaxNLocator
@@ -323,7 +324,7 @@ def map_roads_n_values(
     # base map
     if city_shp_path is not None:
         geo_city = gpd.read_file(city_shp_path).to_crs(local_crs)
-        geo_city.plot(ax=ax, facecolor='lightgray', edgecolor='none')
+        geo_city.plot(ax=ax, facecolor='none', edgecolor='lightgrey', linewidth=1.5)
 
     # roads
     roads = geo_roads.copy()
@@ -345,10 +346,11 @@ def map_roads_n_values(
             # If not found in cmasher, use as is (standard matplotlib colormap)
             cmap_to_use = cmap
     
-    roads.to_crs(local_crs).plot(
-        ax=ax, column="value", cmap=cmap_to_use, linewidth=1.5, legend=True,
-        missing_kwds={"color": "#c5c5c5", "label": "no data"},
-        legend_kwds={"shrink": 0.6,},
+    roads_with_data = roads[pd.notna(roads['value'])]
+    roads_no_data = roads[pd.isna(roads['value'])]
+    roads_no_data.to_crs(local_crs).plot(ax=ax, color="#8d8d8d", linewidth=1.5,label="no data", )
+    roads_with_data.to_crs(local_crs).plot(
+        ax=ax, column="value", cmap=cmap_to_use, linewidth=5.0, legend=True, legend_kwds={"shrink": 0.6},
     )
 
     # show
