@@ -763,7 +763,7 @@ def bar_flood_prob(row):
 def scatter_diff_vs_estimated_diff(
         kld, kld_estimated, out_file=None, 
         xscale='log', yscale='log', reg='linear', base=10,
-        save_dir=None, x_title='KLD1', y_title='KLD2'
+        save_dir=None, x_title='KLD1', y_title='KLD2', if_norm=False
     ):
     import numpy as np
     import os
@@ -779,6 +779,13 @@ def scatter_diff_vs_estimated_diff(
     
     x = np.asarray(kld)
     y = np.asarray(kld_estimated)
+
+    # norm
+    if if_norm:
+        # min_v = min(np.nanmin(x), np.nanmin(y))
+        # max_v = max(np.nanmax(x), np.nanmax(y))
+        x = (x - x.min()) * (1 - 2 * 0.025)/ (x.max() - x.min()) + 0.025
+        y = (y - y.min()) * (1 - 2 * 0.025) / (y.max() - y.min()) + 0.025
 
     # regression line
     def _txy(scale, v):
