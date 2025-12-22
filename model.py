@@ -1924,3 +1924,50 @@ def safe_subtract(a, b):
         return None
     return a - b
 
+
+def calculate_voi_percentage(record_ict, weight_disruption):
+    import pandas as pd
+    import numpy as np
+
+    flattened_data = []
+    for incident_idx, incident in enumerate(record_ict):
+        for record in incident:
+            row = {
+                'incident_id': incident_idx,
+                'inundation': ', '.join(record['inundation']) ,
+                'sensor_count': record['sensor_count'],
+                'sensors_selected': ', '.join(record['sensors_selected']),
+                'inundation_observed': ', '.join(record['inundation_observed']) if record['inundation_observed'] else None,
+                'update_locs': ', '.join(record['update_locs']) if record['update_locs'] else None,
+                'estimated_disruption': record['estimated_disruption'],
+                'estimated_unexpectedness': record['estimated_unexpectedness'],
+            }
+            flattened_data.append(row)
+    df = pd.DataFrame(flattened_data)
+
+    df_reorg = df.sort_values(['sensor_count', 'incident_id']).reset_index(drop=True)
+    cols = ['sensor_count'] + [col for col in df_reorg.columns if col != 'sensor_count']
+    df_reorg = df_reorg[cols]
+
+    def weighted_sum(row):
+        disruption = row['estimated_disruption']
+        unexpectedness = row['estimated_unexpectedness']
+        weighted = [weight_disruption * d + (1 - weight_disruption) * u 
+                    for d, u in zip(disruption, unexpectedness)]
+        return weighted
+    df_reorg['weighted_score'] = df_reorg.apply(weighted_sum, axis=1)
+
+    df_reorg['weighted_score_sum'] = df_reorg['weighted_score'].apply(
+        lambda x: sum(x) if isinstance(x, list) else 0
+    )
+    df_reorg = df_reorg[['sensor_count', 'incident_id', 'weighted_score_sum']]
+
+    df_reorg = df_reorg.groupby('sensor_count')['weighted_score_sum'].sum().reset_index()
+    df_reorg['max_score'] = df_reorg['weighted_score_sum'].iloc[-1]
+    df_reorg['percentage'] = df_reorg['weighted_score_sum'] / df_reorg['max_score']
+
+    averages = df_reorg['percentage'].to_list()
+
+    return averages, df_reorg
+
+
